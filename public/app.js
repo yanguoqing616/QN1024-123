@@ -53,6 +53,7 @@ function onMessage(msg) {
       S.reconnectCode = msg.code;
       localStorage.setItem('ww_pid', msg.playerId);
       history.replaceState(null, '', '?room=' + msg.code);
+      setChip('已连接');
       break;
 
     case 'state':
@@ -93,6 +94,7 @@ function onMessage(msg) {
 
     case 'error':
       toast(msg.msg || '操作失败');
+      setChip('已连接');
       break;
 
     case 'peers':
