@@ -49,6 +49,8 @@ console.log('A 端远端音频元素:', audioA);
 async function drive(page) {
   const roleOk = page.locator('.role-intro.show #roleIntroOk');
   if (await roleOk.count()) { await roleOk.click(); return 'roleIntro'; }
+  const vconfirm = page.locator('#voteConfirmBtn:not([disabled])');
+  if (await vconfirm.count()) { await vconfirm.click(); return 'voteConfirm'; }
   const sheet = page.locator('.sheet-mask.show #sheet button[data-i]').first();
   if (await sheet.count()) { await sheet.click(); return 'sheet'; }
   const noHeal = page.locator('#noHealBtn');

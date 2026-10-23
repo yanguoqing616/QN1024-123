@@ -89,16 +89,26 @@ wss.on('connection', (socket) => {
         rooms.set(code, room);
       }
 
-      const joined = room.join(socket, name, playerId);
+      let joined = room.join(socket, name, playerId, !!msg.spectate);
+      // 房间满了或已经开局 → 自动转成观众，不影响人家打
+      if (!joined && room.phase !== 'lobby') joined = room.addSpectator(socket, name);
+      if (!joined && room.players.length >= 6) joined = room.addSpectator(socket, name);
       if (!joined) {
-        reply(socket, { t: 'error', msg: room.phase === 'lobby' ? '房间已满' : '这局已经开始了' });
+        reply(socket, { t: 'error', msg: '房间已满' });
         room = null;
         return;
       }
       player = joined;
       player.socket = socket;
-      reply(socket, { t: 'joined', playerId: player.id, code: room.code });
+      reply(socket, {
+        t: 'joined',
+        playerId: player.id,
+        code: room.code,
+        spectator: !!player.isSpectator
+      });
       room.sync();
+
+      if (player.isSpectator) return; // 观众不建语音连接
 
       const others = room.players.filter((p) => !p.isAI && p.id !== player.id).map((p) => p.id);
       reply(socket, { t: 'peers', peers: others });
@@ -115,16 +125,18 @@ wss.on('connection', (socket) => {
 
     switch (msg.t) {
       case 'ready':
-        room.setReady(player, msg.value);
+        if (!player.isSpectator) room.setReady(player, msg.value);
         break;
 
       case 'start': {
+        if (player.isSpectator) break;
         const r = room.start(player, msg.voiceStyle);
         if (!r.ok) reply(socket, { t: 'error', msg: r.msg });
         break;
       }
 
       case 'rematch': {
+        if (player.isSpectator) break;
         const r = room.rematch(player);
         if (!r.ok) reply(socket, { t: 'error', msg: r.msg });
         else room.sync();
@@ -132,12 +144,16 @@ wss.on('connection', (socket) => {
       }
 
       case 'action':
-        room.submit(player, msg);
+        if (!player.isSpectator) room.submit(player, msg);
         break;
 
       case 'rtc': {
         const target = room.players.find((p) => p.id === msg.to);
-        if (target) reply(target.socket, { t: 'rtc', from: player.id, data: msg.data });
+        if (!target || player.isSpectator) break;
+        const channel = msg.data && msg.data.channel;
+        // 狼人频道：只有这局活着的狼人之间，且狼人回合内才放行
+        if (channel === 'wolf' && !room.canWolfTalk(player, target)) break;
+        reply(target.socket, { t: 'rtc', from: player.id, data: msg.data });
         break;
       }
 
@@ -157,14 +173,15 @@ wss.on('connection', (socket) => {
     if (!room || !player) return;
     room.leave(player);
     room.sync();
-    for (const p of room.players) {
+    for (const p of [...room.players, ...room.spectators]) {
       if (!p.isAI && p.id !== player.id) reply(p.socket, { t: 'peerLeave', id: player.id });
     }
-    if (room.humans.filter((p) => p.connected).length === 0) {
+    if (room.connectedHumans.length === 0) {
       setTimeout(() => {
         const live = rooms.get(room.code);
-        if (live && live.humans.filter((p) => p.connected).length === 0) {
+        if (live && live.connectedHumans.length === 0) {
           live.running = false;
+          live.closeWolfTalk();
           rooms.delete(live.code);
         }
       }, 60000);

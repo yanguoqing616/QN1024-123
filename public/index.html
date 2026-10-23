@@ -17,6 +17,7 @@
       <span class="day-chip" id="dayChip">未连接</span>
     </div>
     <div class="top-actions">
+      <span class="watch-tag" id="watchTag" hidden>观战</span>
       <button class="ghost-btn" id="roleBtn" hidden>身份</button>
       <button class="ghost-btn" id="logBtn">记录</button>
       <button class="ghost-btn" id="micBtn">连麦</button>
@@ -44,6 +45,7 @@
         <input id="codeInput" inputmode="numeric" maxlength="4" placeholder="4 位数字" />
       </label>
       <button class="block-btn outline" id="joinBtn">加入房间</button>
+      <button class="watch-btn" id="watchBtn">只想旁观？进房观战（不占座位、不下场）</button>
 
       <p class="dock-note" id="entryHint">同一 WiFi 下，朋友打开你的链接就能进。</p>
       <button class="voice-mode" id="voiceModeBtn">语音：真人音色</button>
@@ -75,6 +77,19 @@
         </div>
       </div>
       <div class="seats" id="seats"></div>
+    </div>
+
+    <div class="wolf-bar" id="wolfBar" hidden>
+      <span class="wolf-dot"></span>
+      <span>狼队频道已开 · 只有狼队友听得到你</span>
+    </div>
+
+    <div class="speak-timer" id="speakTimerBar" hidden>
+      <div class="st-head">
+        <span class="st-name" id="stName">发言</span>
+        <span class="st-num" id="stNum">30</span>
+      </div>
+      <div class="st-track"><i id="stFill"></i></div>
     </div>
 
     <div class="host-bar">

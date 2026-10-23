@@ -14,8 +14,10 @@ const AI_NAMES = ['阿岚', '小七', '老陈', '沐沐', '青禾', '阿泽'];
 
 const T = {
   NIGHT: 25000,
-  SPEECH: 60000,
-  VOTE: 30000
+  SPEECH: 30000,   // 每人发言 30 秒，到点主持人打断
+  WOLF: 30000,     // 狼人夜聊 + 选刀
+  VOTE: 30000,     // 投票
+  LAST_WORDS: 30000
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -36,6 +38,7 @@ export class Room {
   constructor(code) {
     this.code = code;
     this.players = [];
+    this.spectators = [];   // 观众：不占座、不参与、不下注，只旁观
     this.phase = 'lobby';
     this.day = 0;
     this.hostId = null;
@@ -48,6 +51,9 @@ export class Room {
     this.winReason = '';
     this.votesShown = false;
     this.speakingSeat = null;
+    this.speak = null;        // { seat, name, total, deadline } 全员可见的发言倒计时
+    this.voteProgress = null; // { done, total } 投票进度
+    this.wolfTalk = false;    // 狼人语音频道是否打开
     this.running = false;
     this.seq = 0;
     this.lastActive = Date.now();
@@ -59,6 +65,11 @@ export class Room {
     return this.players.filter((p) => !p.isAI);
   }
 
+  /** 房间里还连着的人（含观众），用于判断房间是否该回收 */
+  get connectedHumans() {
+    return [...this.humans, ...this.spectators].filter((p) => p.connected);
+  }
+
   alive() {
     return this.players.filter((p) => p.alive);
   }
@@ -67,14 +78,19 @@ export class Room {
     return this.players.find((p) => p.seat === seat) || null;
   }
 
-  join(socket, name, playerId) {
-    const existing = playerId ? this.players.find((p) => p.id === playerId && !p.isAI) : null;
+  join(socket, name, playerId, spectate) {
+    const existing = playerId
+      ? this.players.find((p) => p.id === playerId && !p.isAI) ||
+        this.spectators.find((p) => p.id === playerId)
+      : null;
     if (existing) {
       existing.socket = socket;
       existing.connected = true;
       this.lastActive = Date.now();
       return existing;
     }
+    // 观战：随时可以进，不占座、不参与
+    if (spectate) return this.addSpectator(socket, name);
     if (this.phase !== 'lobby') return null;
     if (this.players.length >= TOTAL_SEATS) return null;
 
@@ -96,8 +112,32 @@ export class Room {
     return p;
   }
 
+  addSpectator(socket, name) {
+    const s = {
+      id: `s${++this.seq}`,
+      name: (name || '').slice(0, 8) || `观众${this.spectators.length + 1}`,
+      seat: -1,
+      isAI: false,
+      isSpectator: true,
+      alive: false,
+      ready: true,
+      role: null,
+      checks: [],
+      socket,
+      connected: true
+    };
+    this.spectators.push(s);
+    this.lastActive = Date.now();
+    return s;
+  }
+
   leave(player) {
     if (!player) return;
+    if (player.isSpectator) {
+      this.spectators = this.spectators.filter((p) => p !== player);
+      this.lastActive = Date.now();
+      return;
+    }
     if (this.phase === 'lobby') {
       this.players = this.players.filter((p) => p !== player);
       this.players.forEach((p, i) => { p.seat = i; });
@@ -142,6 +182,7 @@ export class Room {
 
   broadcast(msg) {
     for (const p of this.players) this.sendTo(p, msg);
+    for (const s of this.spectators) this.sendTo(s, msg);
   }
 
   sync() {
@@ -149,10 +190,15 @@ export class Room {
       if (p.isAI) continue;
       this.sendTo(p, { t: 'state', room: this.publicState(p) });
     }
+    for (const s of this.spectators) {
+      this.sendTo(s, { t: 'state', room: this.publicState(s) });
+    }
   }
 
-  publicState(forPlayer) {
-    const me = forPlayer || null;
+  publicState(viewer) {
+    const spec = viewer && viewer.isSpectator ? viewer : null;
+    const me = viewer && !viewer.isSpectator ? viewer : null;
+    const revealAll = this.phase === 'end' || !!spec; // 结算翻牌 / 观众上帝视角
     return {
       code: this.code,
       phase: this.phase,
@@ -162,6 +208,9 @@ export class Room {
       winReason: this.winReason,
       speakingSeat: this.speakingSeat,
       votesShown: this.votesShown,
+      speak: this.speak,
+      vote: this.voteProgress,
+      wolfTalk: this.wolfTalk,
       players: this.players.map((p) => ({
         id: p.id,
         seat: p.seat,
@@ -173,8 +222,9 @@ export class Room {
         votes: p.votes || 0,
         voice: p.voice || null,
         you: me ? p.id === me.id : false,
-        role: me && (p.id === me.id || this.phase === 'end') ? p.role : null
+        role: me && p.id === me.id ? p.role : revealAll ? p.role : null
       })),
+      spectators: this.spectators.map((s) => ({ id: s.id, name: s.name })),
       self: me
         ? {
             seat: me.seat,
@@ -189,9 +239,26 @@ export class Room {
                 ? this.players
                     .filter((p) => p.role === 'wolf' && p.id !== me.id)
                     .map((p) => ({ seat: p.seat, name: p.name, alive: p.alive }))
+                : null,
+            // 语音频道需要 playerId，只发给狼人自己
+            wolfIds:
+              me.role === 'wolf'
+                ? this.players.filter((p) => p.role === 'wolf' && !p.isAI).map((p) => p.id)
                 : null
           }
-        : null,
+        : spec
+          ? {
+              seat: -1,
+              role: null,
+              alive: false,
+              isHost: false,
+              ready: true,
+              spectator: true,
+              checks: [],
+              potions: null,
+              mates: null
+            }
+          : null,
       log: this.log.slice(-60),
       events: this.events
     };
@@ -208,6 +275,55 @@ export class Room {
     await pace(Math.min(7500, Math.max(1600, text.length * 240)));
   }
 
+  /* ---------------- 全员可见的倒计时 ---------------- */
+
+  startSpeakTimer(seat, ms) {
+    const p = this.bySeat(seat);
+    this.speak = {
+      seat,
+      name: p ? p.name : '',
+      total: Math.round(ms / 1000),
+      deadline: Date.now() + ms
+    };
+    this.broadcast({ t: 'speakTimer', ...this.speak });
+  }
+
+  clearSpeakTimer() {
+    if (!this.speak) return;
+    this.speak = null;
+    this.broadcast({ t: 'speakTimer', seat: null });
+  }
+
+  /* ---------------- 狼人语音频道（只有狼听得到） ---------------- */
+
+  wolfTalkIds() {
+    return this.players.filter((p) => p.alive && p.role === 'wolf' && !p.isAI).map((p) => p.id);
+  }
+
+  openWolfTalk() {
+    this.wolfTalk = true;
+    this.broadcast({ t: 'wolfTalk', on: true }); // 只告诉大家"开了"，不给名单
+    const ids = this.wolfTalkIds();
+    for (const p of this.players) {
+      if (!p.isAI && p.alive && p.role === 'wolf') {
+        this.sendTo(p, { t: 'wolfTalk', on: true, ids }); // 名单只发给狼
+      }
+    }
+  }
+
+  closeWolfTalk() {
+    if (!this.wolfTalk) return;
+    this.wolfTalk = false;
+    this.broadcast({ t: 'wolfTalk', on: false, ids: [] });
+  }
+
+  /** 狼人之间的语音信令只在这段时间内放行 */
+  canWolfTalk(a, b) {
+    if (!this.wolfTalk) return false;
+    if (!a || !b || a.isAI || b.isAI) return false;
+    return a.alive && b.alive && a.role === 'wolf' && b.role === 'wolf';
+  }
+
   /** 遗言：AI 用话术/大模型生成，真人用文字或语音输入 */
   async lastWordsFor(player, reason) {
     if (!player) return;
@@ -215,10 +331,16 @@ export class Room {
 
     let text = '';
     if (player.isAI) {
+      this.startSpeakTimer(player.seat, T.LAST_WORDS);
       text = await aiLastWords(this, player, reason);
       await pace(500);
     } else {
-      const act = await this.ask(player, { kind: 'lastWords', hint: '留一句遗言' }, 25000);
+      this.startSpeakTimer(player.seat, T.LAST_WORDS);
+      const act = await this.ask(
+        player,
+        { kind: 'lastWords', hint: '留一句遗言', seconds: T.LAST_WORDS / 1000 },
+        T.LAST_WORDS
+      );
       text = act && act.text ? String(act.text).slice(0, 200) : '';
     }
     if (!text || !String(text).trim()) text = '（没有留下遗言）';
@@ -226,6 +348,7 @@ export class Room {
     this.logPush('player', text, player.name);
     this.broadcast({ t: 'lastWords', seat: player.seat, name: player.name, text, reason, voice: player.voice });
     await pace(Math.min(7000, Math.max(2000, text.length * 235)));
+    this.clearSpeakTimer();
   }
 
   /* ---------------- 回合等待 ---------------- */
@@ -322,6 +445,8 @@ export class Room {
     this.poisonTarget = null;
     this.votesShown = false;
     this.speakingSeat = null;
+    this.speak = null;
+    this.voteProgress = null;
     this.players.forEach((p) => { p.votes = 0; });
     this.changed();
     this.sync();
@@ -347,6 +472,10 @@ export class Room {
     await this.host('狼人请睁眼。');
     await this.host('请狼人商量一下，今晚要击杀谁。');
 
+    // 打开只有狼人能进的语音频道：狼人之间可以开口商量
+    this.openWolfTalk();
+    await pace(600);
+
     const aiWolf = wolves.find((p) => p.isAI && p.alive);
     const suggestion = aiWolf ? aiWolfTarget(this, aiWolf) : null;
     const reason = suggestion ? wolfSuggestionReason() : '';
@@ -359,11 +488,12 @@ export class Room {
         {
           kind: 'wolfPick',
           hint: '点选今晚要击杀的玩家',
+          talk: this.wolfTalkIds().length > 1,
           suggest: suggestion
             ? { seat: suggestion.seat, name: suggestion.name, reason, mate: aiWolf.name }
             : null
         },
-        T.NIGHT
+        T.WOLF
       );
       if (action && action.seat != null) {
         const target = this.bySeat(Number(action.seat));
@@ -371,6 +501,7 @@ export class Room {
       }
     }
 
+    this.closeWolfTalk();
     for (const wolf of wolves) {
       if (wolf.isAI && suggestion) picks.push(suggestion);
     }
@@ -543,6 +674,7 @@ export class Room {
       if (this.checkWin()) return;
 
       this.speakingSeat = p.seat;
+      this.startSpeakTimer(p.seat, T.SPEECH); // 30 秒发言，所有端都能看到倒计时
       this.sync();
 
       if (p.isAI) {
@@ -560,6 +692,7 @@ export class Room {
         await pace(Math.min(6000, Math.max(1500, finalText.length * 210)));
       }
 
+      this.clearSpeakTimer();
       this.speakingSeat = null;
       this.sync();
     }
@@ -589,8 +722,12 @@ export class Room {
 
     const tally = new Map();
     const record = [];
+    const voters = this.alive();
+    let done = 0;
+    this.voteProgress = { done, total: voters.length };
+    this.sync();
 
-    for (const p of this.alive()) {
+    for (const p of voters) {
       if (p.isAI) {
         await pace(500);
         const t = aiVote(this, p);
@@ -608,8 +745,12 @@ export class Room {
           }
         }
       }
+      done += 1;
+      this.voteProgress = { done, total: voters.length };
+      this.sync();
     }
 
+    this.voteProgress = null;
     this.votesShown = true;
     this.players.forEach((p) => { p.votes = tally.get(p.seat) || 0; });
     this.sync();
@@ -668,6 +809,9 @@ export class Room {
     this.winner = winner;
     this.speakingSeat = null;
     this.votesShown = false;
+    this.speak = null;
+    this.voteProgress = null;
+    this.closeWolfTalk();
 
     const alive = this.alive();
     const gods = alive.filter((p) => p.role === 'seer' || p.role === 'witch').length;
@@ -707,6 +851,9 @@ export class Room {
     this.log = [];
     this.witch = { heal: true, poison: true };
     this.accused = {};
+    this.speak = null;
+    this.voteProgress = null;
+    this.wolfTalk = false;
     this.waiters.clear();
     this.sync();
     return { ok: true };

@@ -1,7 +1,9 @@
 /**
- * 极简 WebRTC 网状语音（6 人以内够用）
+ * 极简 WebRTC 网状语音
+ * - 两条独立通道：
+ *   1) 大厅/发言频段（所有人互连，麦克风只在需要时打开）
+ *   2) 狼人频道（只有狼人之间互连，普通频道听不到这条线上的声音）
  * - 服务端只做信令转发，音频点对点
- * - 默认不放音：只有「当前发言者」把自己的音轨打开
  */
 export class Voice {
   constructor(sendSignal) {
@@ -10,6 +12,10 @@ export class Voice {
     this.pending = new Set();
     this.stream = null;
     this.enabled = false;
+
+    this.wolfPcs = new Map();
+    this.wolfStream = null;
+    this.wolfSeat = null;
   }
 
   async enable() {
@@ -53,17 +59,7 @@ export class Voice {
       if (ev.candidate) this.send({ t: 'rtc', to: id, data: { type: 'ice', candidate: ev.candidate } });
     };
 
-    pc.ontrack = (ev) => {
-      let audio = document.getElementById('audio-' + id);
-      if (!audio) {
-        audio = document.createElement('audio');
-        audio.id = 'audio-' + id;
-        audio.autoplay = true;
-        audio.playsInline = true;
-        document.body.appendChild(audio);
-      }
-      audio.srcObject = ev.streams[0];
-    };
+    pc.ontrack = (ev) => this.attachAudio('audio-' + id, ev.streams[0]);
 
     if (initiator) {
       const offer = await pc.createOffer();
@@ -72,8 +68,89 @@ export class Voice {
     }
   }
 
+  attachAudio(elId, stream) {
+    let audio = document.getElementById(elId);
+    if (!audio) {
+      audio = document.createElement('audio');
+      audio.id = elId;
+      audio.autoplay = true;
+      audio.playsInline = true;
+      document.body.appendChild(audio);
+    }
+    audio.srcObject = stream;
+    audio.play().catch(() => {});
+  }
+
+  /* ---------------- 狼人频道 ---------------- */
+
+  /** 狼人频道用自己的麦克风副本，普通频道完全听不到 */
+  async ensureWolfStream() {
+    if (this.wolfStream) return true;
+    if (!navigator.mediaDevices) return false;
+    try {
+      this.wolfStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true }
+      });
+      this.wolfStream.getAudioTracks().forEach((t) => { t.enabled = false; });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async setWolfMode(on, ids = [], myId = '') {
+    if (!on) {
+      this.closeWolf();
+      return false;
+    }
+    const ok = await this.ensureWolfStream();
+    if (!ok) return false;
+    const list = ids.filter((id) => id && id !== myId);
+    this.wolfSeat = myId;
+    for (const id of list) await this.addWolfPeer(id, String(myId) < String(id));
+    return true;
+  }
+
+  async addWolfPeer(id, initiator) {
+    if (!id || this.wolfPcs.has(id) || !this.wolfStream) return;
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    this.wolfPcs.set(id, pc);
+
+    this.wolfStream.getTracks().forEach((t) => pc.addTrack(t, this.wolfStream));
+    pc.onicecandidate = (ev) => {
+      if (ev.candidate) {
+        this.send({ t: 'rtc', to: id, data: { channel: 'wolf', type: 'ice', candidate: ev.candidate } });
+      }
+    };
+    pc.ontrack = (ev) => this.attachAudio('audio-wolf-' + id, ev.streams[0]);
+
+    if (initiator) {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      this.send({ t: 'rtc', to: id, data: { channel: 'wolf', type: 'offer', sdp: pc.localDescription } });
+    }
+  }
+
+  closeWolf() {
+    for (const [id, pc] of this.wolfPcs) {
+      try { pc.close(); } catch { /* ignore */ }
+      const el = document.getElementById('audio-wolf-' + id);
+      if (el) el.remove();
+    }
+    this.wolfPcs.clear();
+    this.setWolfTalking(false);
+  }
+
+  setWolfTalking(on) {
+    if (!this.wolfStream) return;
+    this.wolfStream.getAudioTracks().forEach((t) => { t.enabled = !!on; });
+  }
+
+  /* ---------------- 信令 ---------------- */
+
   async onSignal(from, data) {
     if (!data) return;
+    if (data.channel === 'wolf') return this.onWolfSignal(from, data);
     if (!this.enabled) await this.enable();
 
     if (data.type === 'offer') {
@@ -89,6 +166,28 @@ export class Voice {
       if (pc) await pc.setRemoteDescription(data.sdp);
     } else if (data.type === 'ice') {
       const pc = this.pcs.get(from);
+      if (pc) {
+        try { await pc.addIceCandidate(data.candidate); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  async onWolfSignal(from, data) {
+    const ok = await this.ensureWolfStream();
+    if (!ok) return;
+    if (data.type === 'offer') {
+      await this.addWolfPeer(from, false);
+      const pc = this.wolfPcs.get(from);
+      if (!pc) return;
+      await pc.setRemoteDescription(data.sdp);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      this.send({ t: 'rtc', to: from, data: { channel: 'wolf', type: 'answer', sdp: pc.localDescription } });
+    } else if (data.type === 'answer') {
+      const pc = this.wolfPcs.get(from);
+      if (pc) await pc.setRemoteDescription(data.sdp);
+    } else if (data.type === 'ice') {
+      const pc = this.wolfPcs.get(from);
       if (pc) {
         try { await pc.addIceCandidate(data.candidate); } catch { /* ignore */ }
       }
