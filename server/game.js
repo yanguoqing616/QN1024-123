@@ -7,6 +7,7 @@ import {
   aiVote,
   wolfSuggestionReason
 } from './ai.js';
+import { HOST_VOICE, voiceForSeat } from './tts.js';
 
 const TOTAL_SEATS = 6;
 const AI_NAMES = ['阿岚', '小七', '老陈', '沐沐', '青禾', '阿泽'];
@@ -170,6 +171,7 @@ export class Room {
         ready: p.ready,
         connected: p.connected,
         votes: p.votes || 0,
+        voice: p.voice || null,
         you: me ? p.id === me.id : false,
         role: me && (p.id === me.id || this.phase === 'end') ? p.role : null
       })),
@@ -201,7 +203,7 @@ export class Room {
 
   async host(text) {
     this.logPush('host', text);
-    this.broadcast({ t: 'host', text });
+    this.broadcast({ t: 'host', text, voice: HOST_VOICE });
     // 按字数留出朗读时间：约 240ms/字，最长 7.5 秒，最短 1.6 秒
     await pace(Math.min(7500, Math.max(1600, text.length * 240)));
   }
@@ -222,8 +224,8 @@ export class Room {
     if (!text || !String(text).trim()) text = '（没有留下遗言）';
 
     this.logPush('player', text, player.name);
-    this.broadcast({ t: 'lastWords', seat: player.seat, name: player.name, text, reason });
-    await pace(Math.min(6000, Math.max(1800, text.length * 180)));
+    this.broadcast({ t: 'lastWords', seat: player.seat, name: player.name, text, reason, voice: player.voice });
+    await pace(Math.min(7000, Math.max(2000, text.length * 235)));
   }
 
   /* ---------------- 回合等待 ---------------- */
@@ -277,6 +279,7 @@ export class Room {
       p.checks = [];
       p.votes = 0;
       p.ready = true;
+      p.voice = voiceForSeat(i); // 每个座位一个固定音色，一局里 6 个人声音都不同
     });
 
     this.phase = 'night';
@@ -543,15 +546,15 @@ export class Room {
         await pace(700);
         const text = await aiSpeech(this, p);
         this.logPush('player', text, p.name);
-        this.broadcast({ t: 'speech', seat: p.seat, name: p.name, text });
+        this.broadcast({ t: 'speech', seat: p.seat, name: p.name, text, voice: p.voice });
         await pace(Math.min(9000, Math.max(2400, text.length * 240)));
       } else {
         const action = await this.ask(p, { kind: 'speak', hint: '轮到你发言' }, T.SPEECH);
         const text = action && action.text ? String(action.text).slice(0, 300) : '';
         const finalText = text || '（没有发言）';
         this.logPush('player', finalText, p.name);
-        this.broadcast({ t: 'speech', seat: p.seat, name: p.name, text: finalText });
-        await pace(Math.min(4000, Math.max(1200, finalText.length * 120)));
+        this.broadcast({ t: 'speech', seat: p.seat, name: p.name, text: finalText, voice: p.voice });
+        await pace(Math.min(6000, Math.max(1500, finalText.length * 210)));
       }
 
       this.speakingSeat = null;

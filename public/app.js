@@ -64,7 +64,7 @@ function onMessage(msg) {
       break;
 
     case 'host':
-      sayHost(msg.text);
+      sayHost(msg.text, msg.voice);
       break;
 
     case 'speech':
@@ -521,7 +521,7 @@ function onSeatClick(seat) {
 }
 
 /* =========================================================
-   主持人语音
+   语音：优先神经语音（接近真人），失败回退系统语音
    ========================================================= */
 let voiceList = [];
 function refreshVoices() {
@@ -532,13 +532,45 @@ if (window.speechSynthesis) {
   window.speechSynthesis.onvoiceschanged = refreshVoices;
 }
 
+/** 系统语音只作为兜底：优先挑自然度高的中文音色 */
 function zhVoice() {
   if (!voiceList.length) refreshVoices();
-  return (
-    voiceList.find((v) => /zh[-_]CN/i.test(v.lang) && /Ting|Xiaoxiao|Yaoyao|女|female/i.test(v.name)) ||
-    voiceList.find((v) => /zh/i.test(v.lang)) ||
-    null
-  );
+  const score = (v) => {
+    let n = 0;
+    if (/zh[-_]CN/i.test(v.lang)) n += 4;
+    else if (/zh/i.test(v.lang)) n += 2;
+    if (/natural|neural|premium|enhanced|online|siri/i.test(v.name)) n += 5;
+    if (/xiaoxiao|xiaoyi|yunxi|yunyang|ting[- ]?ting|meijia|yaoyao|huihui|kangkang/i.test(v.name)) n += 3;
+    if (/female|女/i.test(v.name)) n += 1;
+    return n;
+  };
+  const cn = voiceList.filter((v) => /zh/i.test(v.lang));
+  if (!cn.length) return null;
+  return cn.sort((a, b) => score(b) - score(a))[0] || null;
+}
+
+/* 神经语音（服务端合成，音色接近真人） */
+const NEURAL_KEY = 'ww_voice_engine';
+S.voiceEngine = localStorage.getItem(NEURAL_KEY) === 'system' ? 'system' : 'neural';
+let neuralDown = false; // 连续失败后本轮不再尝试，直接走系统语音
+window.__voice = { neural: 0, system: 0, fail: 0 }; // 调试计数：看过多少句各走了哪条通道
+let neuralFails = 0;
+let audioUnlocked = false;
+
+/** 移动端自动播放限制：第一次点屏幕时先放一段静音，把音频通道“解锁” */
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  try {
+    const a = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA=');
+    a.volume = 0;
+    a.play().catch(() => {});
+  } catch { /* 忽略 */ }
+}
+document.addEventListener('pointerdown', unlockAudio, { once: true });
+
+function ttsUrl(text, voice) {
+  return `/tts?text=${encodeURIComponent(text)}&v=${encodeURIComponent(voice)}`;
 }
 
 /* 朗读队列：一句读完再读下一句，避免互相打断 */
@@ -547,21 +579,31 @@ let speechBusy = false;
 
 function speak(text, opts) {
   return new Promise((resolve) => {
-    if (!S.soundOn || !window.speechSynthesis || !text) { resolve(); return; }
+    if (!S.soundOn || !text) { resolve(); return; }
     if (speechQueue.length >= 6) {
       const dropped = speechQueue.shift();
       if (dropped) dropped.resolve();
     }
-    speechQueue.push({ text: String(text), opts: opts || {}, resolve });
+    const job = { text: String(text), opts: opts || {}, resolve, audio: null };
+    // 队首且空闲时提前加载音频，减少句间空白
+    if (!speechBusy && !speechQueue.length && canUseNeural(job)) {
+      job.audio = new Audio(ttsUrl(job.text, job.opts.voice));
+      job.audio.preload = 'auto';
+    }
+    speechQueue.push(job);
     pumpSpeech();
   });
+}
+
+function canUseNeural(job) {
+  return S.soundOn && !neuralDown && S.voiceEngine === 'neural' && !!job.opts.voice;
 }
 
 function pumpSpeech() {
   if (speechBusy) return;
   const job = speechQueue.shift();
   if (!job) return;
-  if (!S.soundOn || !window.speechSynthesis) { job.resolve(); pumpSpeech(); return; }
+  if (!S.soundOn) { job.resolve(); pumpSpeech(); return; }
 
   speechBusy = true;
   let finished = false;
@@ -573,22 +615,96 @@ function pumpSpeech() {
     pumpSpeech();
   };
 
-  try {
-    const u = new SpeechSynthesisUtterance(job.text);
-    u.lang = 'zh-CN';
-    u.rate = job.opts.rate != null ? job.opts.rate : 0.9;
-    u.pitch = job.opts.pitch != null ? job.opts.pitch : 1;
-    u.volume = 1;
-    const v = zhVoice();
-    if (v) u.voice = v;
-    u.onend = done;
-    u.onerror = done;
-    window.speechSynthesis.speak(u);
-    // 兜底：部分浏览器 onend 不触发，按字数估算最长时间
-    setTimeout(done, Math.max(3200, job.text.length * 340 + 1800));
-  } catch {
-    done();
+  // 当前句在播时，提前把下一句的音频下好，减少句间空白
+  const nextJob = speechQueue[0];
+  if (nextJob && !nextJob.audio && canUseNeural(nextJob)) {
+    nextJob.audio = new Audio(ttsUrl(nextJob.text, nextJob.opts.voice));
+    nextJob.audio.preload = 'auto';
   }
+
+  if (canUseNeural(job)) {
+    playNeural(job).then((ok) => {
+      if (ok) {
+        neuralFails = 0;
+        done();
+        return;
+      }
+      neuralFails += 1;
+      if (neuralFails >= 3) neuralDown = true; // 网络不通就别再等了
+      systemSpeak(job, done);
+    });
+    return;
+  }
+  systemSpeak(job, done);
+}
+
+/** 播神经语音；返回是否成功播放 */
+function playNeural(job) {
+  return new Promise((resolve) => {
+    let audio = job.audio;
+    if (!audio) {
+      audio = new Audio(ttsUrl(job.text, job.opts.voice));
+      audio.preload = 'auto';
+    }
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      audio.onended = null;
+      audio.onerror = null;
+      if (!ok) {
+        try { audio.pause(); } catch { /* 忽略 */ }
+      }
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), 15000);
+    audio.onended = () => { window.__voice.neural += 1; finish(true); };
+    audio.onerror = () => { window.__voice.fail += 1; finish(false); };
+    audio.playbackRate = job.opts.rate && job.opts.rate >= 1 ? Math.min(1.3, job.opts.rate) : 1;
+    audio.play().then(() => {
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        clearTimeout(timer);
+        setTimeout(() => finish(true), audio.duration * 1000 + 1500);
+      }
+    }).catch(() => finish(false));
+  });
+}
+
+/** 系统自带语音（兜底）：按标点断句 + 句间停顿，听起来不那么机械 */
+function systemSpeak(job, done) {
+  if (!window.speechSynthesis) { done(); return; }
+  window.__voice.system += 1;
+  const text = job.text;
+  const parts = text.match(/[^，。！？；、,.!?;]+[，。！？；、,.!?;]?/g) || [text];
+  const segs = parts.map((x) => x.trim()).filter(Boolean);
+  let i = 0;
+  let guard = null;
+
+  const next = () => {
+    if (i >= segs.length) { clearTimeout(guard); done(); return; }
+    const seg = segs[i++];
+    try {
+      const u = new SpeechSynthesisUtterance(seg);
+      u.lang = 'zh-CN';
+      u.rate = job.opts.rate != null ? job.opts.rate : 0.92;
+      u.pitch = job.opts.pitch != null ? job.opts.pitch : 1;
+      const v = zhVoice();
+      if (v) u.voice = v;
+      u.onend = () => {
+        // 逗号短停、句号长停，模拟换气
+        const gap = /[。！？!?]$/.test(seg) ? 260 + Math.random() * 160 : 90 + Math.random() * 90;
+        setTimeout(next, gap);
+      };
+      u.onerror = () => next();
+      window.speechSynthesis.speak(u);
+    } catch {
+      next();
+    }
+  };
+
+  guard = setTimeout(done, Math.max(3200, text.length * 340 + 1800));
+  next();
 }
 
 function clearSpeechQueue() {
@@ -600,13 +716,13 @@ function clearSpeechQueue() {
   if (window.speechSynthesis) window.speechSynthesis.cancel();
 }
 
-async function sayHost(text) {
+async function sayHost(text, voice) {
   $('hostText').textContent = text;
   $('hostText').classList.remove('pulse');
   void $('hostText').offsetWidth;
   $('hostText').classList.add('pulse');
   $('hostDot').classList.add('speaking');
-  await speak(text, { rate: 0.9, pitch: 0.95 });
+  await speak(text, { voice, rate: 1.1, pitch: 1 });
   $('hostDot').classList.remove('speaking');
 }
 
@@ -640,7 +756,7 @@ function addSpeech(msg) {
   const self = S.room.self;
   const isMe = !!(self && self.seat === msg.seat);
   showBubble(msg.name, msg.text, isMe ? '你的发言' : '发言');
-  if (!isMe) speak(msg.text, { rate: 0.98, pitch: 1.12 });
+  if (!isMe) speak(msg.text, { voice: msg.voice, rate: 1.05, pitch: 1.12 });
   if ($('drawer').classList.contains('show')) renderLog();
 }
 
@@ -649,7 +765,7 @@ function addLastWords(msg) {
   const self = S.room.self;
   const isMe = !!(self && self.seat === msg.seat);
   showBubble(msg.name, msg.text, isMe ? '你的遗言' : '遗言');
-  if (!isMe) speak(msg.text, { rate: 0.95, pitch: 1.08 });
+  if (!isMe) speak(msg.text, { voice: msg.voice, rate: 1.02, pitch: 1.08 });
   if ($('drawer').classList.contains('show')) renderLog();
 }
 
@@ -809,6 +925,29 @@ $('soundBtn').addEventListener('click', () => {
   $('soundBtn').textContent = S.soundOn ? '语音开' : '语音关';
   if (!S.soundOn) clearSpeechQueue();
 });
+
+/* ---------------- 音色切换（入口页） ---------------- */
+const voiceModeBtn = $('voiceModeBtn');
+function renderVoiceMode() {
+  const neural = S.voiceEngine === 'neural';
+  voiceModeBtn.textContent = neural ? '语音：真人音色' : '语音：系统音色';
+  voiceModeBtn.classList.toggle('is-system', !neural);
+}
+voiceModeBtn.addEventListener('click', () => {
+  S.voiceEngine = S.voiceEngine === 'neural' ? 'system' : 'neural';
+  localStorage.setItem(NEURAL_KEY, S.voiceEngine);
+  neuralDown = false;
+  neuralFails = 0;
+  renderVoiceMode();
+  if (S.voiceEngine === 'neural') {
+    toast('已切换真人音色，先听一句');
+    speak('我是今晚的主持人，游戏马上开始。', { voice: 'zh-CN-YunyangNeural' });
+  } else {
+    clearSpeechQueue();
+    toast('已切换系统音色');
+  }
+});
+renderVoiceMode();
 
 $('copyBtn').addEventListener('click', async () => {
   const url = `${location.origin}${location.pathname}?room=${S.room.code}`;

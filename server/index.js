@@ -4,13 +4,38 @@ import { WebSocketServer } from 'ws';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Room } from './game.js';
+import { synthesize, HOST_VOICE, PLAYER_VOICES, probe, ensureReady, ttsReady } from './tts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 
 const app = express();
 app.use(express.static(path.join(__dirname, '..', 'public')));
-app.get('/health', (req, res) => res.json({ ok: true, rooms: rooms.size }));
+app.get('/health', (req, res) => res.json({ ok: true, rooms: rooms.size, tts: ttsReady() }));
+
+// 神经语音：/tts?text=...&v=zh-CN-XiaoxiaoNeural
+app.get('/tts', async (req, res) => {
+  const ok = await ensureReady();
+  if (!ok) {
+    res.status(503).end('tts unavailable');
+    return;
+  }
+  const text = String(req.query.text || '').slice(0, 200);
+  const voice = PLAYER_VOICES.includes(req.query.v) || req.query.v === HOST_VOICE ? String(req.query.v) : HOST_VOICE;
+  if (!text.trim()) {
+    res.status(400).end('empty');
+    return;
+  }
+  try {
+    const buf = await synthesize(text, voice);
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.end(buf);
+  } catch (err) {
+    res.status(503).end('tts failed');
+  }
+});
+
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
 
 const server = createServer(app);
@@ -162,4 +187,5 @@ setInterval(() => {
 
 server.listen(PORT, () => {
   console.log(`狼人杀服务已启动: http://localhost:${PORT}`);
+  probe().then((ok) => console.log(ok ? '[tts] 神经语音已就绪' : '[tts] 神经语音不可用，将回退浏览器语音'));
 });
