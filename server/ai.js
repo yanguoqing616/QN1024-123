@@ -44,16 +44,6 @@ const WOLF_ACCUSES = [
 
 const pickOne = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-/** 把别人说过的话压成一句干净的短引用，避免引号套引号 */
-function quote(text, max = 14) {
-  const clean = String(text)
-    .replace(/[「」“”"'‘’（）()]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!clean) return '';
-  return clean.length > max ? clean.slice(0, max) + '…' : clean;
-}
-
 function weightedPick(arr, weightFn) {
   const weights = arr.map(weightFn);
   const total = weights.reduce((a, b) => a + b, 0);
@@ -146,37 +136,55 @@ function targetOf(room, player) {
   return weightedPick(pool, (p) => 1 + (room.accused[p.seat] || 0) * 1.5 + Math.random());
 }
 
-/** 本地话术引擎（未接大模型时使用，追求自然的口语感和前后呼应） */
+/** 本地话术引擎（未接大模型时使用）：短句、口语、有语气词，读起来才像真人 */
+const TICS = ['嗯，', '诶，', '我跟你们说，', '这么说吧，', '哎，'];
+
 function localSpeech(room, player) {
   const target = targetOf(room, player);
-  if (!target) return '场上只剩我一个了，直接投票吧。';
+  if (!target) return '场上就剩我一个了，直接投票吧。';
 
   const prev = lastSpeakerLine(room, player);
   const parts = [];
+  const tic = Math.random() < 0.45 ? pickOne(TICS) : '';
 
-  if (prev && Math.random() < 0.6) {
-    // 只在对方的话足够"干净"时才引用，避免引号套引号
-    const q = prev.text.includes('刚才') ? '' : quote(prev.text);
-    parts.push(q ? `${prev.name}刚才说「${q}」，我不太认同。` : `${prev.name}刚才那段话，我不太认同。`);
+  // 一半概率接上一个人的话，显得在认真听（只提名字，不引用原话，读出来才自然）
+  if (prev && Math.random() < 0.55) {
+    parts.push(pickOne([
+      `${prev.name}刚才说的，我不太同意。`,
+      `${prev.name}那个思路，我觉得有问题。`,
+      `我接着${prev.name}说两句。`,
+      `${prev.name}说得挺满，但我信不过。`,
+      `${prev.name}那段我听着有点虚。`
+    ]));
   } else {
-    parts.push(pickOne(OPENERS));
+    parts.push(tic + pickOne(OPENERS));
   }
 
   if (player.role === 'seer' && player.checks.length) {
     const last = player.checks[player.checks.length - 1];
     const t = room.bySeat(last.seat);
-    const prefix = Math.random() < 0.5 ? '我直接说身份，' : '';
-    parts.push(`${prefix}我是预言家，验的是 ${t.name}，${last.isWolf ? '他是狼' : '他是好人'}。`);
-    parts.push(`所以这轮我出 ${target.name}。`);
+    parts.push(Math.random() < 0.5 ? '我直接亮身份，我是预言家。' : '不绕了，我是预言家。');
+    parts.push(`昨晚验的是${t.name}，${last.isWolf ? '是狼' : '是好人'}。`);
+    parts.push(`所以这轮，我出${target.name}。`);
   } else if (player.role === 'wolf') {
     const reason = pickOne(WOLF_ACCUSES);
-    parts.push(`${target.name} 这轮${reason}，我第一个怀疑他。`);
-    parts.push(pickOne(['这票我给他。', '建议先出他，明天再看。', '我跟票。']));
+    parts.push(`${target.name}这轮${reason}。`);
+    parts.push(pickOne([
+      '我第一个怀疑他。',
+      '我先记他一票。',
+      '建议今天就出他。'
+    ]));
+    if (Math.random() < 0.4) parts.push(pickOne(['剩下的明天再看。', '好人别被他带偏。']));
   } else {
     const reason = pickOne(VILLAGER_REASONS);
-    const lead = Math.random() < 0.4 ? pickOne(FILLERS) : '';
-    parts.push(`${lead}${target.name} ${reason}，我不太敢站他。`);
-    parts.push(pickOne(['我先投他试试。', '这轮我跟一下。', '我倾向出他。']));
+    const lead = Math.random() < 0.35 ? pickOne(FILLERS) : '';
+    parts.push(`${lead}${target.name}${reason}。`);
+    parts.push(pickOne([
+      '这票我先给他。',
+      '我倾向出他。',
+      '我先跟一下这个票。',
+      '我不敢站他。'
+    ]));
   }
 
   room.accused[target.seat] = (room.accused[target.seat] || 0) + 1;
@@ -201,9 +209,9 @@ async function llmSpeech(room, player) {
   const system = [
     `你在玩中文狼人杀，你是「${ROLE_LABEL[player.role]}」，${player.seat + 1} 号位，名字叫${player.name}。`,
     '现在轮到你发言。要求：',
-    '1) 像真人在语音里随口说话，1-2 句，不超过 60 字；',
+    '1) 像真人在语音里随口说话：句子要短，多用逗号断开，可以带“嗯”“诶”“说实话”这类语气词；1-2 句，不超过 55 字；',
     '2) 不要写“（笑）”“顿了顿”这类旁白，不要写自己的名字和角色标签，不要用引号包起来；',
-    '3) 可以怀疑别人、表态要投谁，语气自然口语化；',
+    '3) 可以怀疑别人、表态要投谁；不要用书面语（比如“综上所述”“逻辑闭环”），也不要排比、不要总结陈词；',
     player.role === 'wolf' ? '4) 你是狼人，要伪装成好人，可以带节奏，但绝不能承认自己是狼。' : '',
     player.role === 'seer' && known ? `4) 你可以报查验结果（${known}），也可以选择暂时不报。` : '',
     player.role === 'witch' ? '4) 不要透露你用过什么药。' : '',
@@ -240,7 +248,7 @@ export async function aiSpeech(room, player) {
 export async function aiLastWords(room, player, reason) {
   if (llmEnabled()) {
     try {
-      const system = `你在玩中文狼人杀，你是「${ROLE_LABEL[player.role]}」，刚被${reason === 'vote' ? '投票放逐' : '狼人杀害'}出局。请留一句遗言，不超过 40 字，口语化，可以指认怀疑对象、可以托付好人；狼人不要自曝身份。只输出遗言内容。`;
+      const system = `你在玩中文狼人杀，你是「${ROLE_LABEL[player.role]}」，刚被${reason === 'vote' ? '投票放逐' : '狼人杀害'}出局。请留一句遗言，不超过 40 字，像真人在语音里随口说的一句，可以指认怀疑对象、可以托付好人；狼人不要自曝身份。只输出遗言内容。`;
       const text = await chat([{ role: 'system', content: system }, { role: 'user', content: `存活玩家：${room.alive().map((p) => p.name).join('、')}` }], { maxTokens: 100 });
       const clean = text.replace(/^["'“”\s]+|["'“”\s]+$/g, '').replace(/\n+/g, ' ').slice(0, 60);
       if (clean.length >= 4) return clean;
@@ -255,13 +263,13 @@ export async function aiLastWords(room, player, reason) {
 
   if (player.role === 'seer' && player.checks.length) {
     const last = player.checks[player.checks.length - 1];
-    return `我是预言家，验的 ${room.bySeat(last.seat).name} 是${last.isWolf ? '狼' : '好人'}，好人别投错人。`;
+    return `我是预言家，昨晚验的${room.bySeat(last.seat).name}，${last.isWolf ? '是狼' : '是好人'}，好人别投错。`;
   }
   if (player.role === 'wolf') {
-    return `${target ? target.name + ' 有问题，' : ''}我死了也认，好人后面别乱投。`;
+    return `${target ? target.name + '有问题，' : ''}我死了没事，好人后面别乱投。`;
   }
   if (player.role === 'witch') {
-    return `我走了，好人自己看票型吧${target ? `，我怀疑 ${target.name}` : ''}。`;
+    return `我走了，你们自己看票型${target ? `，我怀疑${target.name}` : ''}。`;
   }
-  return `${target ? `我怀疑 ${target.name}，` : ''}好人帮我出他。`;
+  return `${target ? `我怀疑${target.name}，` : ''}好人帮我出他。`;
 }

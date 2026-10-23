@@ -79,7 +79,16 @@ while (Date.now() < until) {
   await page.waitForTimeout(200);
 }
 const stat = await page.evaluate(() => window.__voice);
-console.log('播放统计:', stat);
+console.log('播放统计: neural=' + stat.neural + ' system=' + stat.system + ' fail=' + stat.fail);
+
+// 查重：玩家发言同一句只能念一遍；主持人固定台词跨夜重复属于正常
+const aiLog = stat.log.filter((it) => it.kind === 'ai');
+const counts = new Map();
+for (const item of aiLog) counts.set(item.t, (counts.get(item.t) || 0) + 1);
+const dup = [...counts.entries()].filter(([, n]) => n > 1);
+console.log('玩家发言共 ' + aiLog.length + ' 句');
+console.log(dup.length ? '✗ 有玩家发言被念两遍: ' + JSON.stringify(dup.slice(0, 3)) : '✓ 玩家发言没有一句被念两遍');
+console.log('实际播放顺序:'); for (const it of stat.log.slice(0, 12)) console.log('   [' + it.ch + '] ' + it.t.slice(0, 30));
 console.log(stat.neural > 0 ? `✓ 神经语音播出 ${stat.neural} 句` : '✗ 没有走神经语音');
 console.log(stat.system === 0 ? '✓ 没有回退系统语音' : `! 回退系统语音 ${stat.system} 句`);
 console.log('页面错误:', errs.length ? errs.slice(0, 3) : '无');

@@ -553,7 +553,7 @@ function zhVoice() {
 const NEURAL_KEY = 'ww_voice_engine';
 S.voiceEngine = localStorage.getItem(NEURAL_KEY) === 'system' ? 'system' : 'neural';
 let neuralDown = false; // 连续失败后本轮不再尝试，直接走系统语音
-window.__voice = { neural: 0, system: 0, fail: 0 }; // 调试计数：看过多少句各走了哪条通道
+window.__voice = { neural: 0, system: 0, fail: 0, log: [] }; // 调试计数：看过多少句各走了哪条通道
 let neuralFails = 0;
 let audioUnlocked = false;
 
@@ -647,27 +647,42 @@ function playNeural(job) {
       audio.preload = 'auto';
     }
     let settled = false;
+    let started = false; // 是否真的开始出声了
+
     const finish = (ok) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimeout(startTimer);
+      clearTimeout(endTimer);
       audio.onended = null;
       audio.onerror = null;
-      if (!ok) {
+      audio.onplaying = null;
+      // 已经开始播过，就算后面出错也不再走系统语音，避免同一句话念两遍
+      const reallyOk = ok || started;
+      if (!reallyOk) {
         try { audio.pause(); } catch { /* 忽略 */ }
+      } else {
+        window.__voice.neural += 1;
+        window.__voice.log.push({ t: job.text, ch: 'neural', kind: job.opts.kind || 'host' });
       }
-      resolve(ok);
+      resolve(reallyOk);
     };
-    const timer = setTimeout(() => finish(false), 15000);
-    audio.onended = () => { window.__voice.neural += 1; finish(true); };
-    audio.onerror = () => { window.__voice.fail += 1; finish(false); };
-    audio.playbackRate = job.opts.rate && job.opts.rate >= 1 ? Math.min(1.3, job.opts.rate) : 1;
-    audio.play().then(() => {
-      if (Number.isFinite(audio.duration) && audio.duration > 0) {
-        clearTimeout(timer);
-        setTimeout(() => finish(true), audio.duration * 1000 + 1500);
-      }
-    }).catch(() => finish(false));
+
+    // 只有"迟迟没开始播"才算失败；开始播之后就一直等它播完
+    const startTimer = setTimeout(() => finish(false), 12000);
+    let endTimer = null;
+
+    audio.onplaying = () => {
+      started = true;
+      clearTimeout(startTimer);
+      const dur = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : job.text.length * 0.25 + 2;
+      // 播完之后再留一点余量，防止 onended 没触发导致队列卡住
+      endTimer = setTimeout(() => finish(true), dur * 1000 + 2500);
+    };
+    audio.onended = () => finish(true);
+    audio.onerror = () => { if (!started) window.__voice.fail += 1; finish(false); };
+
+    audio.play().catch(() => finish(false));
   });
 }
 
@@ -675,6 +690,7 @@ function playNeural(job) {
 function systemSpeak(job, done) {
   if (!window.speechSynthesis) { done(); return; }
   window.__voice.system += 1;
+  window.__voice.log.push({ t: job.text, ch: 'system', kind: job.opts.kind || 'host' });
   const text = job.text;
   const parts = text.match(/[^，。！？；、,.!?;]+[，。！？；、,.!?;]?/g) || [text];
   const segs = parts.map((x) => x.trim()).filter(Boolean);
@@ -722,12 +738,24 @@ async function sayHost(text, voice) {
   void $('hostText').offsetWidth;
   $('hostText').classList.add('pulse');
   $('hostDot').classList.add('speaking');
-  await speak(text, { voice, rate: 1.1, pitch: 1 });
+  await speak(text, { voice, kind: 'host' });
   $('hostDot').classList.remove('speaking');
 }
 
 /* ---------------- 发言气泡 ---------------- */
 let bubbleTimer = null;
+let lastSaidKey = '';
+let lastSaidAt = 0;
+
+/** 同一个人同一句话，5 秒内只念一遍 */
+function shouldSpeak(seat, text) {
+  const key = seat + '|' + text;
+  const now = Date.now();
+  if (key === lastSaidKey && now - lastSaidAt < 5000) return false;
+  lastSaidKey = key;
+  lastSaidAt = now;
+  return true;
+}
 
 function showBubble(name, text, tag) {
   const el = $('bubble');
@@ -756,7 +784,7 @@ function addSpeech(msg) {
   const self = S.room.self;
   const isMe = !!(self && self.seat === msg.seat);
   showBubble(msg.name, msg.text, isMe ? '你的发言' : '发言');
-  if (!isMe) speak(msg.text, { voice: msg.voice, rate: 1.05, pitch: 1.12 });
+  if (!isMe && shouldSpeak(msg.seat, msg.text)) speak(msg.text, { voice: msg.voice, kind: 'ai' });
   if ($('drawer').classList.contains('show')) renderLog();
 }
 
@@ -765,7 +793,7 @@ function addLastWords(msg) {
   const self = S.room.self;
   const isMe = !!(self && self.seat === msg.seat);
   showBubble(msg.name, msg.text, isMe ? '你的遗言' : '遗言');
-  if (!isMe) speak(msg.text, { voice: msg.voice, rate: 1.02, pitch: 1.08 });
+  if (!isMe && shouldSpeak(msg.seat, msg.text)) speak(msg.text, { voice: msg.voice, kind: 'ai' });
   if ($('drawer').classList.contains('show')) renderLog();
 }
 

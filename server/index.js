@@ -4,7 +4,7 @@ import { WebSocketServer } from 'ws';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Room } from './game.js';
-import { synthesize, HOST_VOICE, PLAYER_VOICES, probe, ensureReady, ttsReady } from './tts.js';
+import { synthesize, HOST_VOICE, PLAYER_VOICES, probe, ensureReady, ttsReady, warmup } from './tts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -184,6 +184,13 @@ setInterval(() => {
     socket.ping();
   });
 }, 30000);
+
+// 启动后后台预热：探测可用性 + 预先合成主持人固定台词
+setTimeout(() => {
+  warmup()
+    .then(() => console.log('[tts] 神经语音就绪:', ttsReady()))
+    .catch(() => {});
+}, 300);
 
 server.listen(PORT, () => {
   console.log(`狼人杀服务已启动: http://localhost:${PORT}`);
