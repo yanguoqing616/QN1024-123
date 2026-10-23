@@ -1063,3 +1063,69 @@ button {
   color: var(--ink);
   text-wrap: pretty;
 }
+
+/* =========================================================
+   发言气泡（覆盖在桌面上方，不挤压布局）
+   ========================================================= */
+#gameScreen {
+  position: relative;
+}
+
+.bubble {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  z-index: 40;
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-left: 3px solid var(--accent);
+  border-radius: 16px;
+  padding: 10px 14px 11px;
+  box-shadow: 0 14px 34px rgba(25, 26, 28, 0.13);
+  opacity: 0;
+  transform: translateY(8px) scale(0.985);
+  transition: opacity 0.24s ease, transform 0.24s ease;
+  pointer-events: none;
+}
+
+.bubble.show {
+  opacity: 1;
+  transform: none;
+}
+
+.bubble-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.bubble-name {
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+
+.bubble-tag {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 1px 7px;
+  opacity: 0.85;
+}
+
+.bubble-text {
+  font-size: 13.5px;
+  line-height: 1.72;
+  color: var(--ink);
+  text-wrap: pretty;
+  max-height: 5.2em;
+  overflow: hidden;
+}
+
+body.night .bubble {
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
+}

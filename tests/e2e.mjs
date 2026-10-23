@@ -47,8 +47,10 @@ console.log('A 端远端音频元素:', audioA);
 async function drive(page) {
   const sheet = page.locator('.sheet-mask.show #sheet button[data-i]').first();
   if (await sheet.count()) { await sheet.click(); return 'sheet'; }
-  const noPotion = page.locator('#noPotionBtn');
-  if (await noPotion.count()) { await noPotion.click(); return 'potion'; }
+  const noHeal = page.locator('#noHealBtn');
+  if (await noHeal.count()) { await noHeal.click(); return 'noHeal'; }
+  const noPoison = page.locator('#noPoisonBtn');
+  if (await noPoison.count()) { await noPoison.click(); return 'noPoison'; }
   const agree = page.locator('#agreeBtn');
   if (await agree.count()) { await agree.click(); return 'wolf'; }
   const speak = page.locator('#speakInput');
@@ -64,6 +66,8 @@ async function drive(page) {
 
 let done = { a: false, b: false };
 const seen = new Set();
+const bubbles = new Set();
+let bubbleShot = false;
 for (let i = 0; i < 2400; i++) {
   if (!done.a) { await drive(A); done.a = (await A.locator('#result.show').count()) > 0; }
   if (!done.b) { await drive(B); done.b = (await B.locator('#result.show').count()) > 0; }
@@ -73,6 +77,13 @@ for (let i = 0; i < 2400; i++) {
     const key = label + ' | ' + host;
     if (!seen.has(key)) { seen.add(key); console.log(`[${i}] ${key}`); }
   }
+  // 记录别人发言的气泡，验证 AI 真的在说话
+  const bubbleText = await A.locator('#bubble.show .bubble-text').textContent().catch(() => null);
+  if (bubbleText && !bubbles.has(bubbleText)) {
+    bubbles.add(bubbleText);
+    if (!bubbleShot) { bubbleShot = true; await A.screenshot({ path: 'shots/e2e-bubble.png' }); }
+  }
+
   if (done.a && done.b) break;
   await A.waitForTimeout(150);
 }
@@ -80,6 +91,9 @@ for (let i = 0; i < 2400; i++) {
 console.log('结算: A =', done.a, ' B =', done.b);
 await A.screenshot({ path: 'shots/e2e-result-a.png' });
 await B.screenshot({ path: 'shots/e2e-result-b.png' });
+
+console.log('A 端看到的发言气泡数:', bubbles.size);
+console.log('气泡样例:', [...bubbles].slice(0, 4));
 
 const revealA = await A.locator('.reveal-row').count();
 const roles = await A.locator('.camp-badge').allTextContents();

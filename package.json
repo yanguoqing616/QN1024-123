@@ -8,7 +8,8 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "demo": "node tests/demo.mjs",
-    "test:e2e": "node tests/e2e.mjs"
+    "test:e2e": "node tests/e2e.mjs",
+    "sim": "GAME_PACE=0.08 node tests/sim.mjs"
   },
   "dependencies": {
     "express": "^4.19.2",

@@ -10,6 +10,7 @@ const S = {
   name: localStorage.getItem('ww_name') || '',
   room: null,
   turn: null,
+  turnSeq: 0,
   soundOn: true,
   intentionalClose: false,
   reconnectCode: null,
@@ -70,8 +71,13 @@ function onMessage(msg) {
       addSpeech(msg);
       break;
 
+    case 'lastWords':
+      addLastWords(msg);
+      break;
+
     case 'turn':
       S.turn = msg;
+      S.turnSeq += 1;
       render();
       break;
 
@@ -89,7 +95,12 @@ function onMessage(msg) {
       break;
 
     case 'over':
+      hideBubble();
       showResult();
+      break;
+
+    case 'begin':
+      hideBubble();
       break;
 
     case 'error':
@@ -301,7 +312,7 @@ function renderDock(force) {
   const r = S.room;
   if (!r || r.phase === 'lobby') return;
 
-  const key = [r.phase, S.turn ? S.turn.kind : '', r.speakingSeat, r.self.alive, r.self.role].join('|');
+  const key = [r.phase, S.turn ? S.turn.kind : '', S.turnSeq, r.speakingSeat, r.self.alive, r.self.role].join('|');
   if (!force && key === S.dockKey) return;
   S.dockKey = key;
 
@@ -309,8 +320,9 @@ function renderDock(force) {
   const t = S.turn;
 
   if (t) {
-    if (t.kind === 'speak') return dockSpeak(t);
-    if (t.kind === 'witch') return dockWitch(t);
+    if (t.kind === 'speak' || t.kind === 'lastWords') return dockSpeak(t);
+    if (t.kind === 'witchHeal') return dockWitchHeal(t);
+    if (t.kind === 'witchPoison') return dockWitchPoison(t);
     if (t.kind === 'wolfPick') return dockWolf(t);
     return dockPick(t);
   }
@@ -371,38 +383,39 @@ function dockWolf(t) {
   });
 }
 
-function dockWitch(t) {
+function answer(kind, payload) {
+  send({ t: 'action', kind, ...(payload || {}) });
+  S.turn = null;
+  renderDock(true);
+}
+
+function dockWitchHeal(t) {
   const info = t.info || {};
   const dock = $('gameDock');
-  const heal = info.canHeal
-    ? `<button class="block-btn" id="healBtn">用解药救 ${esc(info.victim)}</button>`
-    : '';
-  const poison = info.canPoison ? '<button class="block-btn" id="poisonBtn">用毒药毒死一人</button>' : '';
   let desc = info.victim ? `今晚被袭击的是：${esc(info.victim)}` : '今晚没有人被袭击。';
   if (info.selfVictim) desc = '今晚被袭击的是你自己，女巫不能自救。';
 
   dock.innerHTML = `
     <div class="dock-hint">${desc}</div>
-    ${heal}${poison}
-    <button class="block-btn outline" id="noPotionBtn">今晚不用药</button>`;
+    ${info.canHeal ? `<button class="block-btn primary" id="healBtn">用解药救 ${esc(info.victim)}</button>` : ''}
+    <button class="block-btn outline" id="noHealBtn">不用解药</button>`;
 
   const healBtn = $('healBtn');
-  if (healBtn) healBtn.addEventListener('click', () => {
-    send({ t: 'action', kind: 'witch', choice: 'heal' });
-    S.turn = null;
-    renderDock(true);
-  });
+  if (healBtn) healBtn.addEventListener('click', () => answer('witchHeal', { choice: 'heal' }));
+  $('noHealBtn').addEventListener('click', () => answer('witchHeal', { choice: 'none' }));
+}
+
+function dockWitchPoison(t) {
+  const info = t.info || {};
+  const dock = $('gameDock');
+  dock.innerHTML = `
+    <div class="dock-hint">${info.canPoison ? '要使用毒药带走一个人吗？' : '你的毒药已经用过了。'}</div>
+    ${info.canPoison ? '<button class="block-btn primary" id="poisonBtn">使用毒药</button>' : ''}
+    <button class="block-btn outline" id="noPoisonBtn">不用毒药</button>`;
+
   const poisonBtn = $('poisonBtn');
-  if (poisonBtn) poisonBtn.addEventListener('click', () => {
-    send({ t: 'action', kind: 'witch', choice: 'poison' });
-    S.turn = null;
-    renderDock(true);
-  });
-  $('noPotionBtn').addEventListener('click', () => {
-    send({ t: 'action', kind: 'witch', choice: 'none' });
-    S.turn = null;
-    renderDock(true);
-  });
+  if (poisonBtn) poisonBtn.addEventListener('click', () => answer('witchPoison', { choice: 'poison' }));
+  $('noPoisonBtn').addEventListener('click', () => answer('witchPoison', { choice: 'none' }));
 }
 
 /* ---------------- 语音发言 ---------------- */
@@ -419,14 +432,19 @@ function stopRecognizer() {
 function dockSpeak(t) {
   const dock = $('gameDock');
   let left = t.seconds || 60;
+  const isLast = t.kind === 'lastWords';
+  const head = isLast ? '轮到你留遗言' : '轮到你发言';
+  const placeholder = isLast
+    ? '说一句遗言，指认你怀疑的人。也可以直接打字。'
+    : '按住下方按钮说话，识别结果会写在这里；也可以直接打字。';
 
   dock.innerHTML = `
     <div class="speak-box">
-      <div class="speak-head"><span>轮到你发言</span><span id="speakTimer">${left}s</span></div>
-      <textarea class="speak-input" id="speakInput" placeholder="按住下方按钮说话，识别结果会写在这里；也可以直接打字。"></textarea>
+      <div class="speak-head"><span>${head}</span><span id="speakTimer">${left}s</span></div>
+      <textarea class="speak-input" id="speakInput" placeholder="${placeholder}"></textarea>
       <div class="speak-actions">
         <button class="hold-btn" id="holdBtn">按住说话</button>
-        <button class="send-btn" id="sendBtn">结束发言</button>
+        <button class="send-btn" id="sendBtn">${isLast ? '说完遗言' : '结束发言'}</button>
       </div>
       <div class="speak-tip" id="speakTip"></div>
     </div>`;
@@ -477,7 +495,7 @@ function dockSpeak(t) {
 
   $('sendBtn').addEventListener('click', () => {
     stopRecognizer();
-    send({ t: 'action', kind: 'speak', text: (input.value || '').trim() });
+    send({ t: 'action', kind: isLast ? 'lastWords' : 'speak', text: (input.value || '').trim() });
     S.turn = null;
     renderDock(true);
   });
@@ -523,24 +541,63 @@ function zhVoice() {
   );
 }
 
-function speak(text) {
+/* 朗读队列：一句读完再读下一句，避免互相打断 */
+const speechQueue = [];
+let speechBusy = false;
+
+function speak(text, opts) {
   return new Promise((resolve) => {
     if (!S.soundOn || !window.speechSynthesis || !text) { resolve(); return; }
-    try {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'zh-CN';
-      u.rate = 1.06;
-      const v = zhVoice();
-      if (v) u.voice = v;
-      let done = false;
-      const finish = () => { if (!done) { done = true; resolve(); } };
-      u.onend = finish;
-      u.onerror = finish;
-      window.speechSynthesis.speak(u);
-      setTimeout(finish, Math.max(2600, text.length * 260 + 1400));
-    } catch { resolve(); }
+    if (speechQueue.length >= 6) {
+      const dropped = speechQueue.shift();
+      if (dropped) dropped.resolve();
+    }
+    speechQueue.push({ text: String(text), opts: opts || {}, resolve });
+    pumpSpeech();
   });
+}
+
+function pumpSpeech() {
+  if (speechBusy) return;
+  const job = speechQueue.shift();
+  if (!job) return;
+  if (!S.soundOn || !window.speechSynthesis) { job.resolve(); pumpSpeech(); return; }
+
+  speechBusy = true;
+  let finished = false;
+  const done = () => {
+    if (finished) return;
+    finished = true;
+    speechBusy = false;
+    job.resolve();
+    pumpSpeech();
+  };
+
+  try {
+    const u = new SpeechSynthesisUtterance(job.text);
+    u.lang = 'zh-CN';
+    u.rate = job.opts.rate != null ? job.opts.rate : 0.9;
+    u.pitch = job.opts.pitch != null ? job.opts.pitch : 1;
+    u.volume = 1;
+    const v = zhVoice();
+    if (v) u.voice = v;
+    u.onend = done;
+    u.onerror = done;
+    window.speechSynthesis.speak(u);
+    // 兜底：部分浏览器 onend 不触发，按字数估算最长时间
+    setTimeout(done, Math.max(3200, job.text.length * 340 + 1800));
+  } catch {
+    done();
+  }
+}
+
+function clearSpeechQueue() {
+  while (speechQueue.length) {
+    const job = speechQueue.shift();
+    job.resolve();
+  }
+  speechBusy = false;
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
 }
 
 async function sayHost(text) {
@@ -549,12 +606,50 @@ async function sayHost(text) {
   void $('hostText').offsetWidth;
   $('hostText').classList.add('pulse');
   $('hostDot').classList.add('speaking');
-  await speak(text);
+  await speak(text, { rate: 0.9, pitch: 0.95 });
   $('hostDot').classList.remove('speaking');
+}
+
+/* ---------------- 发言气泡 ---------------- */
+let bubbleTimer = null;
+
+function showBubble(name, text, tag) {
+  const el = $('bubble');
+  if (!el) return;
+  $('bubbleName').textContent = name || '';
+  $('bubbleTag').textContent = tag || '发言';
+  $('bubbleText').textContent = text || '';
+  const dock = $('gameDock');
+  el.style.bottom = ((dock ? dock.offsetHeight : 120) + 6) + 'px';
+  el.hidden = false;
+  requestAnimationFrame(() => el.classList.add('show'));
+  clearTimeout(bubbleTimer);
+  bubbleTimer = setTimeout(hideBubble, Math.min(16000, Math.max(5000, (text || '').length * 280)));
+}
+
+function hideBubble() {
+  const el = $('bubble');
+  if (!el) return;
+  el.classList.remove('show');
+  clearTimeout(bubbleTimer);
+  bubbleTimer = setTimeout(() => { el.hidden = true; }, 280);
 }
 
 function addSpeech(msg) {
   if (!S.room) return;
+  const self = S.room.self;
+  const isMe = !!(self && self.seat === msg.seat);
+  showBubble(msg.name, msg.text, isMe ? '你的发言' : '发言');
+  if (!isMe) speak(msg.text, { rate: 0.98, pitch: 1.12 });
+  if ($('drawer').classList.contains('show')) renderLog();
+}
+
+function addLastWords(msg) {
+  if (!S.room) return;
+  const self = S.room.self;
+  const isMe = !!(self && self.seat === msg.seat);
+  showBubble(msg.name, msg.text, isMe ? '你的遗言' : '遗言');
+  if (!isMe) speak(msg.text, { rate: 0.95, pitch: 1.08 });
   if ($('drawer').classList.contains('show')) renderLog();
 }
 
@@ -712,7 +807,7 @@ $('micBtn').addEventListener('click', async () => {
 $('soundBtn').addEventListener('click', () => {
   S.soundOn = !S.soundOn;
   $('soundBtn').textContent = S.soundOn ? '语音开' : '语音关';
-  if (!S.soundOn && window.speechSynthesis) window.speechSynthesis.cancel();
+  if (!S.soundOn) clearSpeechQueue();
 });
 
 $('copyBtn').addEventListener('click', async () => {

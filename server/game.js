@@ -3,6 +3,7 @@ import {
   aiSeerTarget,
   aiWitchChoice,
   aiSpeech,
+  aiLastWords,
   aiVote,
   wolfSuggestionReason
 } from './ai.js';
@@ -17,6 +18,10 @@ const T = {
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 节奏系数：默认 1；测试时用 GAME_PACE=0.05 把整局压缩到几秒
+const PACE = process.env.GAME_PACE != null ? Math.max(0, Number(process.env.GAME_PACE)) : 1;
+const pace = (ms) => sleep(Math.round(ms * PACE));
 
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -197,7 +202,28 @@ export class Room {
   async host(text) {
     this.logPush('host', text);
     this.broadcast({ t: 'host', text });
-    await sleep(Math.min(6000, Math.max(1400, text.length * 190)));
+    // 按字数留出朗读时间：约 240ms/字，最长 7.5 秒，最短 1.6 秒
+    await pace(Math.min(7500, Math.max(1600, text.length * 240)));
+  }
+
+  /** 遗言：AI 用话术/大模型生成，真人用文字或语音输入 */
+  async lastWordsFor(player, reason) {
+    if (!player) return;
+    await this.host(`请 ${player.name} 留遗言。`);
+
+    let text = '';
+    if (player.isAI) {
+      text = await aiLastWords(this, player, reason);
+      await pace(500);
+    } else {
+      const act = await this.ask(player, { kind: 'lastWords', hint: '留一句遗言' }, 25000);
+      text = act && act.text ? String(act.text).slice(0, 200) : '';
+    }
+    if (!text || !String(text).trim()) text = '（没有留下遗言）';
+
+    this.logPush('player', text, player.name);
+    this.broadcast({ t: 'lastWords', seat: player.seat, name: player.name, text, reason });
+    await pace(Math.min(6000, Math.max(1800, text.length * 180)));
   }
 
   /* ---------------- 回合等待 ---------------- */
@@ -294,11 +320,14 @@ export class Room {
     this.changed();
     this.sync();
 
-    await this.host('天黑请闭眼。');
+    await this.host('天黑请闭眼，所有人闭上眼睛，不要出声。');
+    await pace(600);
 
     await this.wolvesTurn();
     await this.seerTurn();
     await this.witchTurn();
+
+    await this.host('今晚的行动结束，所有人保持闭眼。');
   }
 
   changed() {
@@ -309,7 +338,8 @@ export class Room {
     const wolves = this.players.filter((p) => p.alive && p.role === 'wolf');
     if (!wolves.length) return;
 
-    await this.host('狼人请睁眼，商量今晚刀谁。');
+    await this.host('狼人请睁眼。');
+    await this.host('请狼人商量一下，今晚要击杀谁。');
 
     const aiWolf = wolves.find((p) => p.isAI && p.alive);
     const suggestion = aiWolf ? aiWolfTarget(this, aiWolf) : null;
@@ -368,11 +398,12 @@ export class Room {
     if (!seer) return;
 
     await this.host('预言家请睁眼。');
+    await this.host('请选择一名玩家，查验他的身份。');
 
     if (seer.isAI) {
       const t = aiSeerTarget(this, seer);
       if (t) seer.checks.push({ seat: t.seat, isWolf: t.role === 'wolf' });
-      await sleep(900);
+      await pace(900);
     } else {
       const action = await this.ask(seer, { kind: 'seerPick', hint: '点选要查验的玩家' }, T.NIGHT);
       let target = action && action.seat != null ? this.bySeat(Number(action.seat)) : null;
@@ -385,7 +416,7 @@ export class Room {
         seer.checks.push({ seat: target.seat, isWolf });
         this.sendTo(seer, { t: 'note', title: `查验结果：${target.name}`, text: isWolf ? '他是狼人。' : '他是好人。' });
         this.logPush('sys', `查验 ${target.name}：${isWolf ? '狼人' : '好人'}`, '预言家');
-        await sleep(2200);
+        await pace(2200);
       }
     }
 
@@ -396,41 +427,62 @@ export class Room {
     const witch = this.players.find((p) => p.alive && p.role === 'witch');
     if (!witch) return;
 
-    await this.host('女巫请睁眼。');
     const victim = this.wolfTarget;
+    const canHeal = !!(victim && victim.seat !== witch.seat && this.witch.heal);
 
+    await this.host('女巫请睁眼。');
+    if (victim) {
+      await this.host(`今晚被狼人袭击的是 ${victim.name}。`);
+    } else {
+      await this.host('今晚是平安夜，没有人被袭击。');
+    }
+
+    // 第一步：解药
+    await this.host('你要使用解药吗？');
     if (witch.isAI) {
       const choice = aiWitchChoice(this, witch);
-      if (choice.choice === 'heal' && victim) {
+      if (choice.choice === 'heal' && canHeal) {
         this.witch.heal = false;
         this.savedVictim = victim;
-      } else if (choice.choice === 'poison' && choice.target) {
-        this.witch.poison = false;
-        this.poisonTarget = choice.target;
       }
-      await sleep(1000);
     } else {
-      const canHeal = !!(victim && victim.seat !== witch.seat && this.witch.heal);
-      const action = await this.ask(
+      const healAct = await this.ask(
         witch,
         {
-          kind: 'witch',
-          hint: '今晚要不要用药？',
+          kind: 'witchHeal',
+          hint: '要使用解药吗？',
           info: {
             victim: victim ? victim.name : null,
             selfVictim: !!(victim && victim.seat === witch.seat),
-            canHeal,
-            canPoison: this.witch.poison
+            canHeal
           }
         },
         T.NIGHT
       );
-
-      if (action && action.choice === 'heal' && canHeal) {
+      if (healAct && healAct.choice === 'heal' && canHeal) {
         this.witch.heal = false;
         this.savedVictim = victim;
         this.sendTo(witch, { t: 'note', title: '用药成功', text: `你用解药救下了 ${victim.name}。` });
-      } else if (action && action.choice === 'poison' && this.witch.poison) {
+      }
+    }
+
+    // 第二步：毒药
+    await this.host('你要使用毒药吗？');
+    if (witch.isAI) {
+      if (this.witch.poison && !this.savedVictim && Math.random() < 0.22) {
+        const pool = this.alive().filter((p) => p !== witch);
+        if (pool.length) {
+          this.witch.poison = false;
+          this.poisonTarget = pool[Math.floor(Math.random() * pool.length)];
+        }
+      }
+    } else {
+      const poisonAct = await this.ask(
+        witch,
+        { kind: 'witchPoison', hint: '要使用毒药吗？', info: { canPoison: this.witch.poison } },
+        T.NIGHT
+      );
+      if (poisonAct && poisonAct.choice === 'poison' && this.witch.poison) {
         const pick = await this.ask(witch, { kind: 'poisonPick', hint: '点选要毒死的玩家' }, T.NIGHT);
         if (pick && pick.seat != null) {
           const t = this.bySeat(Number(pick.seat));
@@ -472,6 +524,11 @@ export class Room {
       await this.host(`昨晚 ${deaths.map((p) => p.name).join('、')} 死亡。`);
     }
 
+    // 夜里的死者留遗言
+    for (const dead of deaths) {
+      await this.lastWordsFor(dead, 'night');
+    }
+
     if (this.checkWin()) return;
 
     await this.host('请按顺序发言。');
@@ -483,18 +540,18 @@ export class Room {
       this.sync();
 
       if (p.isAI) {
-        await sleep(700);
-        const text = aiSpeech(this, p);
+        await pace(700);
+        const text = await aiSpeech(this, p);
         this.logPush('player', text, p.name);
         this.broadcast({ t: 'speech', seat: p.seat, name: p.name, text });
-        await sleep(Math.min(7000, Math.max(1800, text.length * 165)));
+        await pace(Math.min(9000, Math.max(2400, text.length * 240)));
       } else {
         const action = await this.ask(p, { kind: 'speak', hint: '轮到你发言' }, T.SPEECH);
         const text = action && action.text ? String(action.text).slice(0, 300) : '';
         const finalText = text || '（没有发言）';
         this.logPush('player', finalText, p.name);
         this.broadcast({ t: 'speech', seat: p.seat, name: p.name, text: finalText });
-        await sleep(500);
+        await pace(Math.min(4000, Math.max(1200, finalText.length * 120)));
       }
 
       this.speakingSeat = null;
@@ -529,7 +586,7 @@ export class Room {
 
     for (const p of this.alive()) {
       if (p.isAI) {
-        await sleep(500);
+        await pace(500);
         const t = aiVote(this, p);
         if (t) {
           tally.set(t.seat, (tally.get(t.seat) || 0) + 1);
@@ -568,11 +625,13 @@ export class Room {
         await this.host('出现平票，本轮无人出局。');
         this.events.push({ day: this.day, text: `投票：${detail}，平票无人出局` });
       } else {
-        await sleep(300);
+        await pace(300);
         top.p.alive = false;
         this.sync();
         await this.host(`${top.p.name} 被放逐出局。`);
         this.events.push({ day: this.day, text: `${top.p.name} 被投票放逐` });
+        // 被投出局的人留遗言
+        await this.lastWordsFor(top.p, 'vote');
       }
     }
 
@@ -580,7 +639,7 @@ export class Room {
     if (!this.running) return;
 
     await this.host('游戏继续，请准备进入下一夜。');
-    await sleep(400);
+    await pace(400);
   }
 
   /* ---------------- 判定 ---------------- */
