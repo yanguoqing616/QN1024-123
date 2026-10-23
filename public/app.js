@@ -347,13 +347,16 @@ function renderGame() {
     avatar.innerHTML = avatarSvg(p.seat, 55) +
       (p.isAI ? '<span class="ai-badge">AI</span>' : '') + votesHtml;
 
-    // 自己的身份牌：头像下面一直挂着，随时看得到；观众 / 结算时全场可见
+    // 身份牌：自己的一直挂着；狼人能看到狼队友的；观众 / 结算时全场可见
+    const isWolfMate = !p.you &&
+      r.self.role === 'wolf' &&
+      (r.self.mates || []).some((m) => m.seat === p.seat);
     const roleEl = el.querySelector('.seat-role');
-    const showRole = !!p.role && (p.you || S.spectator || r.phase === 'end');
+    const showRole = (!!p.role && (p.you || S.spectator || r.phase === 'end')) || isWolfMate;
     roleEl.hidden = !showRole;
     if (showRole) {
-      roleEl.textContent = roleName(p.role);
-      roleEl.className = 'seat-role ' + (p.role === 'wolf' ? 'wolf' : 'good');
+      roleEl.textContent = isWolfMate ? '狼队友' : roleName(p.role);
+      roleEl.className = 'seat-role ' + (p.role === 'wolf' || isWolfMate ? 'wolf' : 'good');
     }
 
     el.querySelector('.seat-name').textContent = p.name;
