@@ -78,6 +78,7 @@ function onMessage(msg) {
     case 'turn':
       S.turn = msg;
       S.turnSeq += 1;
+      closeRoleIntro(); // 轮到自己操作，先把身份弹层让开
       render();
       break;
 
@@ -185,6 +186,8 @@ function render() {
 
   if (inLobby) { setChip('等待开'); renderLobby(); }
   else renderGame();
+
+  maybeRoleIntro();
 }
 
 function roleName(role) {
@@ -854,6 +857,67 @@ function toast(text) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
 }
+
+/* =========================================================
+   开局身份揭晓
+   ========================================================= */
+const ROLE_META = {
+  wolf: { camp: '狼人阵营', cls: 'wolf', tip: '每晚和狼队友一起刀人，白天要装作好人。' },
+  villager: { camp: '好人阵营', cls: 'good', tip: '没有技能，靠发言和投票把狼人投出去。' },
+  seer: { camp: '好人阵营', cls: 'good', tip: '每晚可以查验一个人是好人还是狼人，结果会记在「身份」里。' },
+  witch: { camp: '好人阵营', cls: 'good', tip: '一瓶解药、一瓶毒药，各只能用一次。' }
+};
+
+function roleIntroText(self) {
+  const meta = ROLE_META[self.role] || {};
+  const lines = [];
+  if (meta.tip) lines.push(meta.tip);
+  if (self.role === 'wolf' && self.mates && self.mates.length) {
+    lines.push('狼队友：' + self.mates.map((m) => `${m.seat + 1}号 ${m.name}`).join('、'));
+  }
+  if (self.role === 'seer' && self.checks && self.checks.length) {
+    lines.push(`已查验 ${self.checks.length} 人，详情见「身份」`);
+  }
+  if (self.role === 'witch' && self.potions) {
+    lines.push(`解药：${self.potions.heal ? '可用' : '已用'}　毒药：${self.potions.poison ? '可用' : '已用'}`);
+  }
+  return lines.join('\n');
+}
+
+function openRoleIntro(self) {
+  const meta = ROLE_META[self.role] || {};
+  $('roleIntroName').textContent = roleName(self.role);
+  $('roleIntroName').className = 'role-name ' + (meta.cls || '');
+  $('roleIntroCamp').textContent = meta.camp || '';
+  $('roleIntroCamp').className = 'role-camp ' + (meta.cls || 'good');
+  $('roleIntroSeat').textContent = `第 ${self.seat + 1} 号位`;
+  $('roleIntroTip').textContent = roleIntroText(self);
+  $('roleIntro').classList.add('show');
+  $('roleIntro').setAttribute('aria-hidden', 'false');
+}
+
+function closeRoleIntro() {
+  const el = $('roleIntro');
+  if (!el.classList.contains('show')) return;
+  el.classList.remove('show');
+  el.setAttribute('aria-hidden', 'true');
+}
+
+/** 每局开局只弹一次：进入对局、拿到自己的身份那一刻 */
+function maybeRoleIntro() {
+  const r = S.room;
+  if (!r || !r.self) return;
+  if (r.phase === 'lobby') { S.roleIntroShown = false; return; }
+  if (r.phase === 'end' || !r.self.role) return;
+  if (S.roleIntroShown) return;
+  S.roleIntroShown = true;
+  openRoleIntro(r.self);
+}
+
+$('roleIntroOk').addEventListener('click', closeRoleIntro);
+$('roleIntro').addEventListener('click', (e) => {
+  if (e.target === $('roleIntro')) closeRoleIntro(); // 点空白处也能收起，别挡住操作
+});
 
 /* =========================================================
    身份卡 / 结算

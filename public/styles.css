@@ -589,6 +589,120 @@ button {
   margin-top: 20px;
 }
 
+/* ---------------- 开局身份揭晓 ---------------- */
+.role-intro {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 26px;
+  background: rgba(12, 13, 16, 0.74);
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.24s ease;
+}
+
+.role-intro.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.role-card {
+  width: 100%;
+  max-width: 318px;
+  padding: 26px 22px 20px;
+  border-radius: 20px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.34);
+  text-align: center;
+  transform: scale(0.94) translateY(10px);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.role-intro.show .role-card {
+  transform: none;
+}
+
+.role-kicker {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: var(--ink-faint);
+}
+
+.role-name {
+  margin-top: 10px;
+  font-size: 38px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.1;
+  color: var(--ink);
+}
+
+.role-name.wolf {
+  color: var(--accent);
+}
+
+.role-name.good {
+  color: var(--good);
+}
+
+.role-meta {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.role-camp {
+  padding: 3px 11px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink-soft);
+}
+
+.role-camp.wolf {
+  background: rgba(180, 85, 47, 0.14);
+  color: var(--accent);
+}
+
+.role-camp.good {
+  background: rgba(74, 124, 93, 0.16);
+  color: var(--good);
+}
+
+.role-seat {
+  color: var(--ink-faint);
+}
+
+.role-tip {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--ink-soft);
+  white-space: pre-line;
+  text-align: left;
+}
+
+.role-card .block-btn {
+  margin-top: 16px;
+}
+
+.role-note {
+  margin: 12px 0 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
 /* ---------------- 记录抽屉 ---------------- */
 .drawer {
   position: fixed;

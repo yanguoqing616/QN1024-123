@@ -39,10 +39,14 @@ await A.click('#startBtn');
 console.log('开局，开始自动演示…');
 
 async function drive(page) {
+  const roleOk = page.locator('.role-intro.show #roleIntroOk');
+  if (await roleOk.count()) { await roleOk.click(); return; }
   const sheet = page.locator('.sheet-mask.show #sheet button[data-i]').first();
   if (await sheet.count()) { await sheet.click(); return; }
-  const noPotion = page.locator('#noPotionBtn');
-  if (await noPotion.count()) { await noPotion.click(); return; }
+  for (const id of ['#noHealBtn', '#noPoisonBtn']) {
+    const el = page.locator(id);
+    if (await el.count()) { await el.click(); return; }
+  }
   const agree = page.locator('#agreeBtn');
   if (await agree.count()) { await agree.click(); return; }
   const input = page.locator('#speakInput');

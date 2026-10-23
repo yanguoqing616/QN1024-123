@@ -37,7 +37,9 @@ await A.waitForTimeout(2500);
 console.log('A 进入对局:', await A.locator('#gameScreen.on').count(), 'B 进入对局:', await B.locator('#gameScreen.on').count());
 await A.screenshot({ path: 'shots/e2e-game-a.png' });
 
-// 双方都点连麦，验证 WebRTC 通
+// 双方都点连麦，验证 WebRTC 通（先把身份弹窗收起来）
+await A.click('#roleIntroOk');
+await B.click('#roleIntroOk');
 await A.click('#micBtn');
 await B.click('#micBtn');
 await A.waitForTimeout(1500);
@@ -45,6 +47,8 @@ const audioA = await A.evaluate(() => document.querySelectorAll('audio').length)
 console.log('A 端远端音频元素:', audioA);
 
 async function drive(page) {
+  const roleOk = page.locator('.role-intro.show #roleIntroOk');
+  if (await roleOk.count()) { await roleOk.click(); return 'roleIntro'; }
   const sheet = page.locator('.sheet-mask.show #sheet button[data-i]').first();
   if (await sheet.count()) { await sheet.click(); return 'sheet'; }
   const noHeal = page.locator('#noHealBtn');
