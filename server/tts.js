@@ -26,28 +26,58 @@ function lib() {
   return edge;
 }
 
-/** 主持人：男声播音腔，稳重清晰 */
+/** 主持人：男声播音腔，普通话，稳重清晰 */
 export const HOST_VOICE = 'zh-CN-YunyangNeural';
 
 /**
- * AI 玩家音色池：6 个座位各一个，男女都有，音色差异明显。
- * 只用实测可用的音色（zh-CN-XiaochenNeural 等在这套接口上会返回空音频）。
+ * 音色池：每个座位固定一把声音。
+ * - dialect：默认，带方言（东北话 / 陕西话），一桌人听起来最像真人在开黑
+ * - mandarin：全普通话，需要正式一点时用
+ *
+ * 只用实测能出声的音色。这套免费接口只开放了 14 个中文音色，
+ * 方言只有 liaoning-Xiaobei（东北话）和 shaanxi-Xiaoni（陕西话）两个；
+ * 河南、四川等音色调用会返回空音频（0 字节），所以不要写进来。
  */
-export const PLAYER_VOICES = [
-  'zh-CN-XiaoxiaoNeural', // 女 · 温柔
-  'zh-CN-YunxiNeural', // 男 · 青年
-  'zh-CN-XiaoyiNeural', // 女 · 活泼
-  'zh-CN-YunjianNeural', // 男 · 沉稳
-  'zh-CN-shaanxi-XiaoniNeural', // 女 · 陕西口音，最有"真人"感
-  'zh-CN-YunxiaNeural' // 男 · 少年
-];
+export const VOICE_STYLES = {
+  dialect: [
+    { id: 'zh-CN-liaoning-XiaobeiNeural', label: '女 · 东北话' },
+    { id: 'zh-CN-YunxiNeural', label: '男 · 青年' },
+    { id: 'zh-CN-shaanxi-XiaoniNeural', label: '女 · 陕西话' },
+    { id: 'zh-CN-YunjianNeural', label: '男 · 沉稳' },
+    { id: 'zh-CN-XiaoxiaoNeural', label: '女 · 温柔' },
+    { id: 'zh-CN-YunxiaNeural', label: '男 · 少年' }
+  ],
+  mandarin: [
+    { id: 'zh-CN-XiaoxiaoNeural', label: '女 · 温柔' },
+    { id: 'zh-CN-YunxiNeural', label: '男 · 青年' },
+    { id: 'zh-CN-XiaoyiNeural', label: '女 · 活泼' },
+    { id: 'zh-CN-YunjianNeural', label: '男 · 沉稳' },
+    { id: 'zh-CN-YunyangNeural', label: '男 · 播音' },
+    { id: 'zh-CN-YunxiaNeural', label: '男 · 少年' }
+  ]
+};
+
+/** 兼容旧引用：默认方言音色池 */
+export const PLAYER_VOICES = VOICE_STYLES.dialect.map((v) => v.id);
+
+export function normalizeStyle(style) {
+  if (style === 'mandarin' || style === 'system') return style;
+  return 'dialect';
+}
+
+export function voiceForSeat(seat, style = 'dialect') {
+  const set = VOICE_STYLES[normalizeStyle(style)] || VOICE_STYLES.dialect;
+  return set[Math.abs(Number(seat) || 0) % set.length].id;
+}
+
+/** 给前端展示用：这个风格下每个座位是什么声音 */
+export function voiceTable(style = 'dialect') {
+  const set = VOICE_STYLES[normalizeStyle(style)] || VOICE_STYLES.dialect;
+  return set.map((v, i) => ({ seat: i, ...v }));
+}
 
 /** 兜底音色：某个音色失效时改用它，保证不会掉到系统机器人音 */
 const BACKUP_VOICE = 'zh-CN-XiaoxiaoNeural';
-
-export function voiceForSeat(seat) {
-  return PLAYER_VOICES[Math.abs(Number(seat) || 0) % PLAYER_VOICES.length];
-}
 
 /** 每个音色的基础语速/音高（百分比 / Hz），后面还会加一点随机抖动 */
 const BASE = {
@@ -57,6 +87,7 @@ const BASE = {
   'zh-CN-XiaoyiNeural': { rate: 12, pitch: 4 },
   'zh-CN-YunjianNeural': { rate: 3, pitch: -4 },
   'zh-CN-shaanxi-XiaoniNeural': { rate: 5, pitch: 1 },
+  'zh-CN-liaoning-XiaobeiNeural': { rate: 9, pitch: 2 },
   'zh-CN-YunxiaNeural': { rate: 11, pitch: 3 }
 };
 

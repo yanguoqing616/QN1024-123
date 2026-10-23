@@ -7,7 +7,7 @@ import {
   aiVote,
   wolfSuggestionReason
 } from './ai.js';
-import { HOST_VOICE, voiceForSeat } from './tts.js';
+import { HOST_VOICE, voiceForSeat, normalizeStyle } from './tts.js';
 
 const TOTAL_SEATS = 6;
 const AI_NAMES = ['阿岚', '小七', '老陈', '沐沐', '青禾', '阿泽'];
@@ -262,7 +262,7 @@ export class Room {
 
   /* ---------------- 开局 ---------------- */
 
-  start(player) {
+  start(player, voiceStyle) {
     if (this.phase !== 'lobby') return { ok: false, msg: '已经开局了' };
     if (this.hostId !== player.id) return { ok: false, msg: '只有房主能开局' };
     if (!this.humans.every((p) => p.ready || p.id === this.hostId)) {
@@ -270,6 +270,9 @@ export class Room {
     }
 
     while (this.players.length < TOTAL_SEATS) this.addAI();
+
+    // 音色风格由房主决定：dialect（默认，带东北话/陕西话）/ mandarin / system
+    this.voiceStyle = normalizeStyle(voiceStyle || this.voiceStyle || 'dialect');
 
     const deck = shuffle(['wolf', 'wolf', 'villager', 'villager', 'seer', 'witch']);
     this.players.forEach((p, i) => {
@@ -279,7 +282,7 @@ export class Room {
       p.checks = [];
       p.votes = 0;
       p.ready = true;
-      p.voice = voiceForSeat(i); // 每个座位一个固定音色，一局里 6 个人声音都不同
+      p.voice = voiceForSeat(i, this.voiceStyle); // 每个座位一个固定音色，一局里 6 个人声音都不同
     });
 
     this.phase = 'night';

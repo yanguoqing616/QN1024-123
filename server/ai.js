@@ -139,6 +139,27 @@ function targetOf(room, player) {
 /** 本地话术引擎（未接大模型时使用）：短句、口语、有语气词，读起来才像真人 */
 const TICS = ['嗯，', '诶，', '我跟你们说，', '这么说吧，', '哎，'];
 
+/**
+ * 东北话口音的文字微调：只有分到东北话音色的座位才用。
+ * 只换几个高频词，音色本身已经带腔调，改多了反而像演小品。
+ */
+const NORTHEAST_SWAPS = [
+  [/我觉得/g, '我觉着'],
+  [/我不太同意/g, '我不太认可'],
+  [/什么/g, '啥'],
+  [/怎么/g, '咋'],
+  [/非常/g, '贼'],
+  [/有点虚/g, '有点假'],
+  [/不绕了/g, '不整虚的']
+];
+
+function dialectize(text, player) {
+  if (!player || player.voice !== 'zh-CN-liaoning-XiaobeiNeural') return text;
+  let out = text;
+  for (const [re, to] of NORTHEAST_SWAPS) out = out.replace(re, to);
+  return out;
+}
+
 function localSpeech(room, player) {
   const target = targetOf(room, player);
   if (!target) return '场上就剩我一个了，直接投票吧。';
@@ -235,12 +256,12 @@ export async function aiSpeech(room, player) {
   if (llmEnabled()) {
     try {
       const text = await llmSpeech(room, player);
-      if (text && text.length >= 4) return text;
+      if (text && text.length >= 4) return dialectize(text, player);
     } catch (err) {
       console.warn('[ai] 大模型发言失败，改用本地话术:', err.message);
     }
   }
-  return localSpeech(room, player);
+  return dialectize(localSpeech(room, player), player);
 }
 
 /* ---------------- 遗言 ---------------- */
@@ -251,7 +272,7 @@ export async function aiLastWords(room, player, reason) {
       const system = `你在玩中文狼人杀，你是「${ROLE_LABEL[player.role]}」，刚被${reason === 'vote' ? '投票放逐' : '狼人杀害'}出局。请留一句遗言，不超过 40 字，像真人在语音里随口说的一句，可以指认怀疑对象、可以托付好人；狼人不要自曝身份。只输出遗言内容。`;
       const text = await chat([{ role: 'system', content: system }, { role: 'user', content: `存活玩家：${room.alive().map((p) => p.name).join('、')}` }], { maxTokens: 100 });
       const clean = text.replace(/^["'“”\s]+|["'“”\s]+$/g, '').replace(/\n+/g, ' ').slice(0, 60);
-      if (clean.length >= 4) return clean;
+      if (clean.length >= 4) return dialectize(clean, player);
     } catch (err) {
       console.warn('[ai] 大模型遗言失败:', err.message);
     }
@@ -263,7 +284,7 @@ export async function aiLastWords(room, player, reason) {
 
   if (player.role === 'seer' && player.checks.length) {
     const last = player.checks[player.checks.length - 1];
-    return `我是预言家，昨晚验的${room.bySeat(last.seat).name}，${last.isWolf ? '是狼' : '是好人'}，好人别投错。`;
+    return dialectize(`我是预言家，昨晚验的${room.bySeat(last.seat).name}，${last.isWolf ? '是狼' : '是好人'}，好人别投错。`, player);
   }
   if (player.role === 'wolf') {
     return `${target ? target.name + '有问题，' : ''}我死了没事，好人后面别乱投。`;

@@ -38,6 +38,10 @@ const voices = await new Promise((resolve) => {
 const uniq = new Set(voices.filter(Boolean));
 console.log('座位音色:', voices.join(', '));
 console.log(voices.length === 6 && uniq.size === 6 ? '✓ 6 个座位音色互不相同' : '✗ 音色分配异常');
+const hasNortheast = voices.includes('zh-CN-liaoning-XiaobeiNeural');
+const hasShaanxi = voices.includes('zh-CN-shaanxi-XiaoniNeural');
+console.log(hasNortheast ? '✓ 默认带东北话' : '✗ 默认没有东北话');
+console.log(hasShaanxi ? '✓ 默认带陕西话' : '✗ 默认没有陕西话');
 
 /* ---------- 2. 浏览器播放 ---------- */
 const browser = await chromium.launch({
@@ -51,6 +55,11 @@ await page.goto(BASE);
 await page.fill('#nameInput', '音色测试');
 await page.click('#createBtn');
 await page.waitForSelector('#lobbyScreen.on', { timeout: 8000 });
+
+// 默认必须是真人音色（带方言），不是系统音色
+const modeText = await page.textContent('#voiceModeBtn');
+console.log('入口音色档位:', modeText);
+console.log(/方言/.test(modeText || '') ? '✓ 默认是真人音色·带方言' : '✗ 默认不是方言真人音色');
 await page.click('#readyBtn');
 await page.click('#startBtn');
 await page.waitForSelector('#gameScreen.on', { timeout: 8000 });
@@ -95,4 +104,4 @@ console.log('页面错误:', errs.length ? errs.slice(0, 3) : '无');
 
 await page.screenshot({ path: 'shots/voice-check.png' });
 await browser.close();
-process.exit(stat.neural > 0 && uniq.size === 6 ? 0 : 1);
+process.exit(stat.neural > 0 && uniq.size === 6 && hasNortheast && hasShaanxi && /方言/.test(modeText || '') ? 0 : 1);

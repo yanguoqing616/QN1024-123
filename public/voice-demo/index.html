@@ -26,7 +26,17 @@
   }
   .wrap { max-width: 560px; margin: 0 auto; }
   h1 { font-size: 19px; font-weight: 600; letter-spacing: .01em; margin: 0 0 6px; }
-  .sub { font-size: 12.5px; color: var(--ink-soft); margin: 0 0 26px; }
+  .sub { font-size: 12.5px; color: var(--ink-soft); margin: 0 0 22px; }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    letter-spacing: .04em;
+    color: var(--good);
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    padding: 1px 9px;
+    margin-bottom: 14px;
+  }
   .sec-title {
     font-size: 11px; letter-spacing: .16em; color: var(--ink-faint);
     margin: 30px 0 10px; display: flex; align-items: center; gap: 10px;
@@ -83,26 +93,67 @@
 <body>
 <div class="wrap">
   <h1>语音试听</h1>
-  <p class="sub">同一句台词左右对比，以及 6 位 AI 玩家各自的音色。</p>
+  <p class="sub">默认就是这套真人音色：一桌 6 个人 6 把声音，其中两位带方言。</p>
+  <span class="badge">默认真人音色 · 带方言</span>
 
-  <div class="sec-title">A / B 对比（同一句话）</div>
-  <div class="cmp">
-    <div class="row" data-src="a-old.mp3">
-      <span class="tag">旧版 · 48k 无起伏</span>
-      <button class="play">播放</button>
+  <div class="sec-title">方言音色（默认局里就有）</div>
+  <div class="row" data-src="seat-1.mp3">
+    <span class="dot">1</span>
+    <div class="meta">
+      <div class="name">女 · 东北话<small>Xiaobei · 默认 1 号位</small></div>
+      <div class="say">嗯，我跟你们说，他这轮一直跟票，自己一点想法都没有，我瞅着不像好人。</div>
     </div>
-    <div class="row new" data-src="b-new.mp3">
-      <span class="tag">新版 · 96k 带语气</span>
-      <button class="play">播放</button>
-    </div>
+    <button class="play">播放</button>
   </div>
-  <p class="note">旧版是手机发闷的电话音，每句腔调一模一样；新版换高码率，并在每句里微调语速和音高，听起来不那么“念稿”。</p>
+  <div class="row" data-src="seat-3.mp3">
+    <span class="dot">3</span>
+    <div class="meta">
+      <div class="name">女 · 陕西话<small>Xiaoni · 默认 3 号位</small></div>
+      <div class="say">这么说吧，他明显在带节奏，我听着不太对劲，建议今天就出他。</div>
+    </div>
+    <button class="play">播放</button>
+  </div>
+  <p class="note">这套免费接口里能用的方言只有东北话和陕西话（河南、四川音色调用会返回空音频），所以默认就这两位带口音，其余普通话，听起来像真的凑了一桌人。</p>
 
-  <div class="sec-title">主持人</div>
+  <div class="sec-title">普通话音色</div>
+  <div class="row" data-src="seat-2.mp3">
+    <span class="dot">2</span>
+    <div class="meta">
+      <div class="name">男 · 青年<small>Yunxi</small></div>
+      <div class="say">诶，他这轮一直在跟票，自己没想法，我倾向出他。</div>
+    </div>
+    <button class="play">播放</button>
+  </div>
+  <div class="row" data-src="seat-4.mp3">
+    <span class="dot">4</span>
+    <div class="meta">
+      <div class="name">男 · 沉稳<small>Yunjian · 预言家报验</small></div>
+      <div class="say">不绕了，我是预言家。昨晚验的是阿岚，是狼。</div>
+    </div>
+    <button class="play">播放</button>
+  </div>
+  <div class="row" data-src="seat-5.mp3">
+    <span class="dot">5</span>
+    <div class="meta">
+      <div class="name">女 · 温柔<small>Xiaoxiao</small></div>
+      <div class="say">阿岚刚才那段我听着有点虚，这票我先给他。</div>
+    </div>
+    <button class="play">播放</button>
+  </div>
+  <div class="row" data-src="seat-6.mp3">
+    <span class="dot">6</span>
+    <div class="meta">
+      <div class="name">男 · 少年<small>Yunxia</small></div>
+      <div class="say">我怀疑他，好人跟我一起投。</div>
+    </div>
+    <button class="play">播放</button>
+  </div>
+
+  <div class="sec-title">主持人（普通话播音腔）</div>
   <div class="row" data-src="host-1.mp3">
     <span class="dot">主</span>
     <div class="meta">
-      <div class="name">天黑请闭眼<small>男声 · 播音腔</small></div>
+      <div class="name">天黑请闭眼<small>Yunyang</small></div>
       <div class="say">天黑请闭眼，所有人闭上眼睛，不要出声。</div>
     </div>
     <button class="play">播放</button>
@@ -124,57 +175,20 @@
     <button class="play">播放</button>
   </div>
 
-  <div class="sec-title">6 位 AI 玩家</div>
-  <div class="row" data-src="seat-1.mp3">
-    <span class="dot">1</span>
-    <div class="meta">
-      <div class="name">女 · 温柔<small>Xiaoxiao</small></div>
-      <div class="say">嗯，阿岚刚才那段我听着有点虚，这票我先给他。</div>
+  <div class="sec-title">A / B 对比（同一句话）</div>
+  <div class="cmp">
+    <div class="row" data-src="a-old.mp3">
+      <span class="tag">旧版 · 48k 无起伏</span>
+      <button class="play">播放</button>
     </div>
-    <button class="play">播放</button>
-  </div>
-  <div class="row" data-src="seat-2.mp3">
-    <span class="dot">2</span>
-    <div class="meta">
-      <div class="name">男 · 青年<small>Yunxi</small></div>
-      <div class="say">诶，我跟你们说，他这轮一直在跟票，自己没想法，我倾向出他。</div>
+    <div class="row new" data-src="b-new.mp3">
+      <span class="tag">新版 · 96k 带语气</span>
+      <button class="play">播放</button>
     </div>
-    <button class="play">播放</button>
   </div>
-  <div class="row" data-src="seat-3.mp3">
-    <span class="dot">3</span>
-    <div class="meta">
-      <div class="name">女 · 活泼<small>Xiaoyi</small></div>
-      <div class="say">说实话，他前后逻辑对不上，我不敢站他。</div>
-    </div>
-    <button class="play">播放</button>
-  </div>
-  <div class="row" data-src="seat-4.mp3">
-    <span class="dot">4</span>
-    <div class="meta">
-      <div class="name">男 · 沉稳<small>Yunjian · 预言家报验</small></div>
-      <div class="say">不绕了，我是预言家。昨晚验的是阿岚，是狼。</div>
-    </div>
-    <button class="play">播放</button>
-  </div>
-  <div class="row" data-src="seat-5.mp3">
-    <span class="dot">5</span>
-    <div class="meta">
-      <div class="name">女 · 陕西口音<small>Xiaoni</small></div>
-      <div class="say">这么说吧，他明显在带节奏，建议今天就出他。</div>
-    </div>
-    <button class="play">播放</button>
-  </div>
-  <div class="row" data-src="seat-6.mp3">
-    <span class="dot">6</span>
-    <div class="meta">
-      <div class="name">男 · 少年<small>Yunxia</small></div>
-      <div class="say">我怀疑他，好人跟我一起投。</div>
-    </div>
-    <button class="play">播放</button>
-  </div>
+  <p class="note">旧版是手机发闷的电话音，每句腔调一模一样；新版换高码率，并在每句里微调语速和音高，不那么“念稿”。</p>
 
-  <p class="note">第 5 位用的是陕西口音，真人感最强；不喜欢可以换成标准普通话。</p>
+  <p class="note">入口页最下面那个小按钮可以切三档：真人·带方言（默认）→ 真人·普通话 → 系统音色。房主开局时的选择决定这一桌用哪一档。</p>
 </div>
 
 <script>

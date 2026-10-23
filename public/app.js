@@ -228,7 +228,7 @@ function renderLobby() {
   }
   $('lobbyList').innerHTML = rows.join('');
 
-  const key = `lobby:${r.self.ready}:${r.self.isHost}`;
+  const key = `lobby:${r.self.ready}:${r.self.isHost}:${S.voiceStyle}`;
   if (S.dockKey === key) return;
   S.dockKey = key;
 
@@ -236,6 +236,7 @@ function renderLobby() {
     <button class="block-btn ${r.self.ready ? '' : 'primary'}" id="readyBtn">${r.self.ready ? '取消准备' : '我已准备就绪'}</button>
     <button class="block-btn ${r.self.isHost ? 'primary' : 'outline'}" id="startBtn">${r.self.isHost ? '开始游戏' : '等待房主开局'}</button>
     <p class="dock-note">${r.players.filter((p) => !p.isAI).length} 位真人 · 不足 6 人由 AI 补齐</p>
+    <p class="dock-note">语音：${S.voiceStyle === 'system' ? '系统音色' : S.voiceStyle === 'mandarin' ? '真人·普通话' : '真人·带方言（东北话 / 陕西话）'}</p>
   `;
 
   $('readyBtn').addEventListener('click', () => send({ t: 'ready', value: !r.self.ready }));
@@ -244,7 +245,7 @@ function renderLobby() {
       toast('等房主开局');
       return;
     }
-    send({ t: 'start' });
+    send({ t: 'start', voiceStyle: S.voiceStyle === 'system' ? 'dialect' : S.voiceStyle });
   });
 }
 
@@ -549,9 +550,15 @@ function zhVoice() {
   return cn.sort((a, b) => score(b) - score(a))[0] || null;
 }
 
-/* 神经语音（服务端合成，音色接近真人） */
+/* 神经语音（服务端合成，音色接近真人）
+   三档：dialect（默认，带东北话/陕西话）/ mandarin（全普通话）/ system（浏览器自带） */
 const NEURAL_KEY = 'ww_voice_engine';
-S.voiceEngine = localStorage.getItem(NEURAL_KEY) === 'system' ? 'system' : 'neural';
+S.voiceStyle = (() => {
+  const saved = localStorage.getItem(NEURAL_KEY);
+  if (saved === 'system' || saved === 'mandarin' || saved === 'dialect') return saved;
+  return 'dialect'; // 默认就是真人音色，且带方言
+})();
+S.voiceEngine = S.voiceStyle === 'system' ? 'system' : 'neural';
 let neuralDown = false; // 连续失败后本轮不再尝试，直接走系统语音
 window.__voice = { neural: 0, system: 0, fail: 0, log: [] }; // 调试计数：看过多少句各走了哪条通道
 let neuralFails = 0;
@@ -956,24 +963,36 @@ $('soundBtn').addEventListener('click', () => {
 
 /* ---------------- 音色切换（入口页） ---------------- */
 const voiceModeBtn = $('voiceModeBtn');
+const VOICE_LABEL = {
+  dialect: '语音：真人·带方言',
+  mandarin: '语音：真人·普通话',
+  system: '语音：系统音色'
+};
+const VOICE_PREVIEW = {
+  dialect: { text: '嗯，我跟你们说，他这轮一直跟票，我瞅着不像好人。', voice: 'zh-CN-liaoning-XiaobeiNeural' },
+  mandarin: { text: '我是今晚的主持人，游戏马上开始。', voice: 'zh-CN-YunyangNeural' }
+};
+
 function renderVoiceMode() {
-  const neural = S.voiceEngine === 'neural';
-  voiceModeBtn.textContent = neural ? '语音：真人音色' : '语音：系统音色';
-  voiceModeBtn.classList.toggle('is-system', !neural);
+  voiceModeBtn.textContent = VOICE_LABEL[S.voiceStyle] || VOICE_LABEL.dialect;
+  voiceModeBtn.classList.toggle('is-system', S.voiceStyle === 'system');
 }
 voiceModeBtn.addEventListener('click', () => {
-  S.voiceEngine = S.voiceEngine === 'neural' ? 'system' : 'neural';
-  localStorage.setItem(NEURAL_KEY, S.voiceEngine);
+  const order = ['dialect', 'mandarin', 'system'];
+  S.voiceStyle = order[(order.indexOf(S.voiceStyle) + 1) % order.length];
+  S.voiceEngine = S.voiceStyle === 'system' ? 'system' : 'neural';
+  localStorage.setItem(NEURAL_KEY, S.voiceStyle);
   neuralDown = false;
   neuralFails = 0;
   renderVoiceMode();
-  if (S.voiceEngine === 'neural') {
-    toast('已切换真人音色，先听一句');
-    speak('我是今晚的主持人，游戏马上开始。', { voice: 'zh-CN-YunyangNeural' });
-  } else {
-    clearSpeechQueue();
-    toast('已切换系统音色');
+  clearSpeechQueue();
+  if (S.voiceStyle === 'system') {
+    toast('已切换系统音色（不带方言）');
+    return;
   }
+  const p = VOICE_PREVIEW[S.voiceStyle];
+  toast(S.voiceStyle === 'dialect' ? '真人音色·东北话，先听一句' : '真人音色·普通话，先听一句');
+  speak(p.text, { voice: p.voice, kind: 'host' });
 });
 renderVoiceMode();
 

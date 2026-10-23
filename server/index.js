@@ -119,7 +119,7 @@ wss.on('connection', (socket) => {
         break;
 
       case 'start': {
-        const r = room.start(player);
+        const r = room.start(player, msg.voiceStyle);
         if (!r.ok) reply(socket, { t: 'error', msg: r.msg });
         break;
       }
