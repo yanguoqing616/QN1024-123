@@ -129,6 +129,16 @@ button {
   border-color: var(--hair-strong);
 }
 
+.ghost-btn.danger {
+  color: var(--accent);
+  border-color: rgba(180, 85, 47, 0.4);
+}
+
+.ghost-btn.danger:active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 /* ---------------- 桌面 ---------------- */
 .stage {
   flex: 1 1 auto;
@@ -1030,6 +1040,12 @@ button {
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+.lobby-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .lobby-code .label {

@@ -32,6 +32,7 @@ function send(msg) {
 
 function connect(code, opts) {
   if (opts && opts.spectate != null) S.spectate = !!opts.spectate;
+  S.intentionalClose = false;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}/ws`);
   S.ws = ws;
@@ -188,6 +189,32 @@ function onMessage(msg) {
 $('nameInput').value = S.name;
 const urlRoom = new URLSearchParams(location.search).get('room');
 if (urlRoom) $('codeInput').value = urlRoom;
+
+function leaveRoom() {
+  S.intentionalClose = true;
+  if (S.ws && S.ws.readyState === 1) {
+    try { S.ws.send(JSON.stringify({ t: 'leave' })); } catch { /* ignore */ }
+  }
+  if (S.ws) { try { S.ws.close(); } catch { /* ignore */ } }
+  S.ws = null;
+  S.room = null;
+  S.turn = null;
+  S.spectator = false;
+  S.spectate = false;
+  S.votePick = null;
+  S.voteCasts = [];
+  closeRoleIntro();
+  hideBubble();
+  $('result').classList.remove('show');
+  $('drawer').classList.remove('show');
+  $('entryScreen').classList.add('on');
+  $('lobbyScreen').classList.remove('on');
+  $('gameScreen').classList.remove('on');
+  $('watchTag').hidden = true;
+  $('roleBtn').hidden = true;
+  setChip('未连接');
+  history.replaceState(null, '', location.pathname);
+}
 
 function readName() {
   const name = $('nameInput').value.trim().slice(0, 8);
@@ -1294,6 +1321,7 @@ function showResult() {
     <div class="result-actions">
       ${r.self.isHost ? '<button class="block-btn primary" id="rematchBtn">再来一局</button>' : '<div class="dock-hint">等房主开新局</div>'}
       <button class="block-btn outline" id="reviewBtn">查看发言记录</button>
+      <button class="block-btn outline" id="quitResultBtn">退出房间</button>
     </div>`;
 
   $('result').classList.add('show');
@@ -1309,6 +1337,7 @@ function showResult() {
     renderLog();
     $('drawer').classList.add('show');
   });
+  $('quitResultBtn').addEventListener('click', leaveRoom);
 }
 
 /* =========================================================
@@ -1386,4 +1415,8 @@ $('copyBtn').addEventListener('click', async () => {
   } catch {
     toast(`房间号 ${S.room.code}，让朋友输入就能进`);
   }
+});
+
+$('quitBtn').addEventListener('click', () => {
+  if (confirm('确定退出房间吗？')) leaveRoom();
 });

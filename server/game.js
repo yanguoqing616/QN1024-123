@@ -140,16 +140,24 @@ export class Room {
       this.lastActive = Date.now();
       return;
     }
-    if (this.phase === 'lobby') {
+    // 未开始（大厅）或已结束：允许真正退出，移除座位；否则只标记断线
+    if (this.phase === 'lobby' || this.phase === 'end') {
       this.players = this.players.filter((p) => p !== player);
-      this.players.forEach((p, i) => { p.seat = i; });
-      if (this.hostId === player.id) {
-        const next = this.humans[0];
-        this.hostId = next ? next.id : null;
+      if (this.phase === 'lobby') {
+        this.players.forEach((p, i) => { p.seat = i; }); // 大厅重排座位号
       }
+      this.transferHost(player);
     } else {
+      // 对局进行中：不能中途退出，只标记断线，游戏照常进行
       player.connected = false;
     }
+  }
+
+  /** 房主退出时，把房主身份交给下一个序号（最小座位号）的真人玩家 */
+  transferHost(player) {
+    if (this.hostId !== player.id) return;
+    const next = this.humans[0];
+    this.hostId = next ? next.id : null;
   }
 
   setReady(player, value) {
