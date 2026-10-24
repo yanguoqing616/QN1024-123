@@ -141,6 +141,17 @@ function onMessage(msg) {
       showResult();
       break;
 
+    case 'shutdown':
+      // 因内容违规被强制关房：提示后返回首页（房间已失效，无法再进）
+      hideBubble();
+      S.turn = null;
+      openSheet({
+        title: '房间已关闭',
+        desc: msg.reason || '因内容违规，房间已被关闭',
+        actions: [{ label: '返回首页', value: 1, primary: true }]
+      }).then(() => location.reload());
+      break;
+
     case 'begin':
       hideBubble();
       break;

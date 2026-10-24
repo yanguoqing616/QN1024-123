@@ -8,6 +8,7 @@ import {
   wolfSuggestionReason
 } from './ai.js';
 import { HOST_VOICE, voiceForSeat, normalizeStyle } from './tts.js';
+import { checkText, CATEGORY_NAMES } from './moderation.js';
 
 const TOTAL_SEATS = 6;
 const AI_NAMES = ['阿岚', '小七', '老陈', '沐沐', '青禾', '阿泽'];
@@ -55,6 +56,7 @@ export class Room {
     this.voteProgress = null; // { done, total } 投票进度
     this.wolfTalk = false;    // 狼人语音频道是否打开
     this.running = false;
+    this.closed = false;      // 因违规被强制关闭后置真，禁止再进入
     this.seq = 0;
     this.lastActive = Date.now();
   }
@@ -383,10 +385,31 @@ export class Room {
   }
 
   submit(player, action) {
+    // 发言/遗言文本风控：涉黄涉恐涉政 → 直接关闭房间
+    if (action && action.text) {
+      const m = checkText(String(action.text));
+      if (m.blocked) {
+        this.shutdown(`「${player.name}」的发言包含${CATEGORY_NAMES[m.category] || '敏感'}内容，房间已关闭`);
+        return false;
+      }
+    }
     const waiter = this.waiters.get('act:' + player.id);
     if (!waiter) return false;
     waiter(action);
     return true;
+  }
+
+  /** 因违规强制关房：结束游戏、关闭狼聊、广播并标记房间失效 */
+  shutdown(reason) {
+    if (this.closed) return;
+    this.closed = true;
+    this.running = false;
+    this.phase = 'end';
+    this.winner = null;
+    this.winReason = '';
+    this.closeWolfTalk();
+    this.broadcast({ t: 'shutdown', reason: reason || '房间已关闭' });
+    this.sync();
   }
 
   async ask(player, prompt, timeoutMs) {
@@ -485,6 +508,7 @@ export class Room {
 
     await this.host('狼人请睁眼。');
     await this.host('请狼人商量一下，今晚要击杀谁。');
+    await this.host('你们之间的商量只有狼人能听见，请小声讨论。');
 
     // 打开只有狼人能进的语音频道：狼人之间可以开口商量
     this.openWolfTalk();

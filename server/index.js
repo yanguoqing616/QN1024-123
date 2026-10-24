@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Room } from './game.js';
 import { synthesize, HOST_VOICE, PLAYER_VOICES, probe, ensureReady, ttsReady, warmup } from './tts.js';
+import { moderate, checkName, CATEGORY_NAMES } from './moderation.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -77,9 +78,18 @@ wss.on('connection', (socket) => {
       const playerId = msg.playerId ? String(msg.playerId) : null;
       let code = msg.code ? String(msg.code).trim() : '';
 
+      // 昵称风控：涉黄涉恐涉政 → 禁止使用
+      if (name) {
+        const m = checkName(name);
+        if (m.blocked) {
+          reply(socket, { t: 'error', msg: `昵称包含${CATEGORY_NAMES[m.category] || '敏感'}内容，请更换` });
+          return;
+        }
+      }
+
       if (code) {
         room = rooms.get(code) || null;
-        if (!room) {
+        if (!room || room.closed) {
           reply(socket, { t: 'error', msg: '房间不存在或已结束' });
           return;
         }
@@ -209,6 +219,13 @@ setInterval(() => {
     socket.ping();
   });
 }, 30000);
+
+// 定期清理因违规被强制关闭的房间
+setInterval(() => {
+  for (const [code, r] of rooms) {
+    if (r.closed) rooms.delete(code);
+  }
+}, 60000);
 
 // 启动后后台预热：探测可用性 + 预先合成主持人固定台词
 setTimeout(() => {
