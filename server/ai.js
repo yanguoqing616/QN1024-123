@@ -153,10 +153,25 @@ const NORTHEAST_SWAPS = [
   [/不绕了/g, '不整虚的']
 ];
 
+const BEIJING_SWAPS = [
+  [/什么/g, '嘛'],
+  [/怎么/g, '怎么着'],
+  [/别着急/g, '您别着急'],
+  [/没问题/g, '没毛病'],
+  [/就是/g, '这不就是']
+];
+
 function dialectize(text, player) {
-  if (!player || player.voice !== 'zh-CN-liaoning-XiaobeiNeural') return text;
+  if (!player) return text;
   let out = text;
-  for (const [re, to] of NORTHEAST_SWAPS) out = out.replace(re, to);
+  if (player.voice === 'zh-CN-liaoning-XiaobeiNeural') {
+    for (const [re, to] of NORTHEAST_SWAPS) out = out.replace(re, to);
+  }
+  if (player.voice === 'zh-CN-Beijing-DaYeNeural') {
+    for (const [re, to] of BEIJING_SWAPS) out = out.replace(re, to);
+    if (!/[。！？!?]$/.test(out)) out += '。';
+    out = '得嘞，' + out;
+  }
   return out;
 }
 

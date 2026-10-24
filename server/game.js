@@ -35,6 +35,27 @@ function shuffle(arr) {
   return arr;
 }
 
+/**
+ * 姓名打码：不管名字多长，一律加密成一个「*」。
+ * 用于非狼人 / 非女巫身份看到「被击杀者」时的显示，例如：
+ *   "阿岚" → "*"，"欧阳娜娜" → "*"
+ */
+function maskName(name) {
+  const n = String(name || '').trim();
+  return n ? '*' : '某人';
+}
+
+/** 把一句话里出现的若干姓名替换成打码版 */
+function maskSecrets(text, secrets) {
+  if (!text || !secrets) return text;
+  const list = Array.isArray(secrets) ? secrets : [secrets];
+  let out = String(text);
+  for (const n of list) {
+    if (n) out = out.split(n).join(maskName(n));
+  }
+  return out;
+}
+
 export class Room {
   constructor(code) {
     this.code = code;
@@ -269,13 +290,63 @@ export class Room {
               mates: null
             }
           : null,
-      log: this.log.slice(-60),
-      events: this.events
+      log: this.logFor(viewer),
+      events: this.eventsFor(viewer)
     };
   }
 
-  logPush(type, text, name = '') {
-    this.log.push({ type, text, name, day: this.day, at: Date.now() });
+  /**
+   * 谁能看到"被击杀者"的明文姓名：
+   * 狼人（自己动的手）、女巫（要决定救不救）、观众（上帝视角）、结算后（已翻牌）。
+   * 平民和预言家只能看到打码版 —— 这是狼人杀的关键信息差。
+   */
+  canSeeVictim(viewer) {
+    if (!viewer) return false;
+    if (viewer.isSpectator) return true;
+    if (this.phase === 'end') return true;
+    return viewer.role === 'wolf' || viewer.role === 'witch';
+  }
+
+  /**
+   * 写一条记录。secret 里放上只有狼人 / 女巫能看的姓名，
+   * 下发时按观众身份决定给明文还是打码（不是所有服务端调用都会读到它）。
+   */
+  logPush(type, text, name = '', secret = null) {
+    this.log.push({ type, text, name, day: this.day, at: Date.now(), secret });
+  }
+
+  /** 记录抽屉按身份下发：看不了的人自动把敏感姓名打码 */
+  logFor(viewer) {
+    const reveal = this.canSeeVictim(viewer);
+    return this.log.slice(-60).map((item) => {
+      const { secret, text, ...rest } = item;
+      return { ...rest, text: reveal || !secret ? text : maskSecrets(text, secret) };
+    });
+  }
+
+  /** 夜间大事记同理，否则会绕过主持人台词泄露被杀者 */
+  eventsFor(viewer) {
+    const reveal = this.canSeeVictim(viewer);
+    return this.events.map((e) => ({
+      day: e.day,
+      text: reveal || !e.secret ? e.text : maskSecrets(e.text, e.secret)
+    }));
+  }
+
+  /**
+   * 主持人台词「按身份分别下发」：同一步操作，不同身份听到 / 看到的内容可以不一样。
+   *   textFor(viewer, canSee) => 这个人该看到的台词
+   *   logText                => 写进公共记录的那一版（一律打码，保证记录抽屉对所有人都一样）
+   * 多人同一台设备时会互相听到语音，所以设计上只保证「各自画面看到的是自己权限内的内容」。
+   */
+  async hostToRoles(textFor, logText) {
+    for (const p of [...this.players, ...this.spectators]) {
+      if (p.isAI) continue; // AI 不需要听台词
+      const text = textFor(p, this.canSeeVictim(p));
+      if (text) this.sendTo(p, { t: 'host', text, voice: HOST_VOICE });
+    }
+    this.logPush('host', logText);
+    await pace(Math.min(7500, Math.max(1600, logText.length * 240)));
   }
 
   async host(text) {
@@ -514,13 +585,15 @@ export class Room {
     const wolves = this.players.filter((p) => p.alive && p.role === 'wolf');
     if (!wolves.length) return;
 
+    const talkable = this.wolfTalkIds().length > 1; // 有队友才需要连麦商量
     await this.host('狼人请睁眼。');
-    await this.host('请狼人商量一下，今晚要击杀谁。');
-    await this.host('你们之间的商量只有狼人能听见，请小声讨论。');
+    await this.host('请确认今晚要击杀的目标。');
 
-    // 打开只有狼人能进的语音频道：狼人之间可以开口商量
-    this.openWolfTalk();
-    await pace(600);
+    // 只有两名及以上真人狼时才开语音频道；单狼直接选目标，不打扰、不提示连麦
+    if (talkable) {
+      this.openWolfTalk();
+      await pace(600);
+    }
 
     const aiWolf = wolves.find((p) => p.isAI && p.alive);
     const suggestion = aiWolf ? aiWolfTarget(this, aiWolf) : null;
@@ -534,7 +607,8 @@ export class Room {
         {
           kind: 'wolfPick',
           hint: '点选今晚要击杀的玩家',
-          talk: this.wolfTalkIds().length > 1,
+          // talk 为真表示"已和队友连麦"，客户端据此提示可以直接开口说话
+          talk: this.wolfTalk && this.wolfTalkIds().length > 1,
           suggest: suggestion
             ? { seat: suggestion.seat, name: suggestion.name, reason, mate: aiWolf.name }
             : null
@@ -615,7 +689,18 @@ export class Room {
 
     await this.host('女巫请睁眼。');
     if (victim) {
-      await this.host(`今晚被狼人袭击的是 ${victim.name}。`);
+      // 被刀的人只让狼人和女巫知道；平民 / 预言家看到的是打码版
+      await this.hostToRoles(
+        (viewer, canSee) => {
+          if (canSee) {
+            return viewer.role === 'wolf'
+              ? `今晚你们袭击的是 ${victim.name}。`
+              : `今晚被狼人袭击的是 ${victim.name}。`;
+          }
+          return `今晚有人被袭击了，姓名加密显示为 ${maskName(victim.name)}，天亮后揭晓。`;
+        },
+        `今晚有人被袭击了，身份暂时保密（${maskName(victim.name)}）。`
+      );
     } else {
       await this.host('今晚是平安夜，没有人被袭击。');
     }
@@ -693,10 +778,15 @@ export class Room {
     this.nightDeaths = deaths;
 
     const notes = [];
-    if (this.wolfTarget) notes.push(`狼人袭击了 ${this.wolfTarget.name}`);
-    if (this.savedVictim) notes.push(`女巫用解药救下 ${this.savedVictim.name}`);
-    if (this.poisonTarget) notes.push(`女巫毒杀了 ${this.poisonTarget.name}`);
-    this.events.push({ day: this.day, text: notes.join('；') || '夜间无有效行动' });
+    const secrets = [];
+    if (this.wolfTarget) { notes.push(`狼人袭击了 ${this.wolfTarget.name}`); secrets.push(this.wolfTarget.name); }
+    if (this.savedVictim) { notes.push(`女巫用解药救下 ${this.savedVictim.name}`); secrets.push(this.savedVictim.name); }
+    if (this.poisonTarget) { notes.push(`女巫毒杀了 ${this.poisonTarget.name}`); secrets.push(this.poisonTarget.name); }
+    this.events.push({
+      day: this.day,
+      text: notes.join('；') || '夜间无有效行动',
+      secret: secrets.length ? secrets : null
+    });
 
     this.sync();
 
@@ -727,14 +817,14 @@ export class Room {
         await pace(700);
         const text = await aiSpeech(this, p);
         this.logPush('player', text, p.name);
-        this.broadcast({ t: 'speech', seat: p.seat, name: p.name, text, voice: p.voice });
+        this.broadcast({ t: 'speech', seat: p.seat, name: p.name, text, voice: p.voice, repeat: false });
         await pace(Math.min(9000, Math.max(2400, text.length * 240)));
       } else {
         const action = await this.ask(p, { kind: 'speak', hint: '轮到你发言' }, T.SPEECH);
         const text = action && action.text ? String(action.text).slice(0, 300) : '';
         const finalText = text || '（没有发言）';
         this.logPush('player', finalText, p.name);
-        this.broadcast({ t: 'speech', seat: p.seat, name: p.name, text: finalText, voice: p.voice });
+        this.broadcast({ t: 'speech', seat: p.seat, name: p.name, text: finalText, voice: p.voice, repeat: false });
         await pace(Math.min(6000, Math.max(1500, finalText.length * 210)));
       }
 

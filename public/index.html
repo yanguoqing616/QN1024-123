@@ -19,9 +19,9 @@
     <div class="top-actions">
       <span class="watch-tag" id="watchTag" hidden>观战</span>
       <button class="ghost-btn" id="roleBtn" hidden>身份</button>
-      <button class="ghost-btn" id="logBtn">记录</button>
-      <button class="ghost-btn" id="micBtn">连麦</button>
-      <button class="ghost-btn" id="soundBtn">语音开</button>
+      <button class="ghost-btn" id="logBtn" hidden>记录</button>
+      <button class="ghost-btn" id="micBtn" hidden>连麦</button>
+      <button class="ghost-btn" id="soundBtn" hidden>语音开</button>
     </div>
   </header>
 
@@ -48,7 +48,7 @@
       <button class="watch-btn" id="watchBtn">只想旁观？进房观战（不占座位、不下场）</button>
 
       <p class="dock-note" id="entryHint">同一 WiFi 下，朋友打开你的链接就能进。</p>
-      <button class="voice-mode" id="voiceModeBtn">语音：真人音色</button>
+      <button class="voice-mode" id="voiceModeBtn" hidden>语音：真人音色</button>
     </div>
   </section>
 
@@ -101,6 +101,11 @@
         <div class="host-tag">主持人</div>
         <div class="host-text" id="hostText" aria-live="polite">等人到齐就可以开始了。</div>
       </div>
+    </div>
+
+    <div class="link-hint" id="linkHint" hidden>
+      <b>连不上房间服务</b>
+      <span>请用带 sharecode 参数的完整分享链接打开；聊天工具里转发容易截断，建议复制整段地址到浏览器。</span>
     </div>
 
     <div class="dock" id="gameDock"></div>

@@ -388,7 +388,11 @@ button {
   font-size: 13.5px;
   line-height: 1.7;
   color: var(--ink);
-  min-height: 23px;
+  /* 高度固定两行：主持人台词长短不一时，圆桌和底部操作区不会被顶来顶去 */
+  min-height: 3.4em;
+  max-height: 3.4em;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   text-wrap: pretty;
 }
 
@@ -1373,6 +1377,30 @@ body.night .seat-role.good {
 }
 
 /* 发言倒计时：全场可见 */
+.link-hint {
+  flex: 0 0 auto;
+  margin: 2px 20px 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #fff7e6;
+  border: 1px solid #ffd591;
+  color: #8a5a00;
+  font-size: 12.5px;
+  line-height: 1.6;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.link-hint[hidden] {
+  display: none;
+}
+
+.link-hint b {
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .speak-timer {
   margin: 0 0 6px;
   padding: 8px 12px 10px;

@@ -44,6 +44,25 @@ export class Voice {
     ids.forEach((id) => this.addPeer(id, true));
   }
 
+  /** 有人离开：关掉跟他的连接，顺便摘掉对应的喇叭 */
+  removePeer(id) {
+    if (!id) return;
+    const close = (map, elPrefix) => {
+      const pc = map.get(id);
+      if (pc) {
+        try { pc.close(); } catch { /* 忽略 */ }
+        map.delete(id);
+      }
+      const el = document.getElementById(elPrefix + id);
+      if (el) el.remove();
+    };
+    close(this.pcs, 'audio-');
+    if (this.wolfPcs.has(id)) close(this.wolfPcs, 'audio-wolf-');
+    // 还没建起来的连接也一并清掉，省得他回来之后重复连
+    this.pending.delete(id + '+');
+    this.pending.delete(id + '-');
+  }
+
   async addPeer(id, initiator) {
     if (!id) return;
     if (!this.enabled) { this.pending.add(id + (initiator ? '+' : '-')); return; }

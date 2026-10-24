@@ -20,7 +20,9 @@ const S = {
   spectate: false,
   spectator: false,
   votePick: null,
-  wolfKey: ''
+  wolfKey: '',
+  bubbleToken: 0,
+  activeBubbleSeat: null
 };
 
 /* =========================================================
@@ -28,6 +30,19 @@ const S = {
    ========================================================= */
 function send(msg) {
   if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(msg));
+}
+
+let linkHinted = false;
+/** 连不上服务端时，给用户一个能自己看懂的原因和动作 */
+function showLinkHint() {
+  if (S.intentionalClose || linkHinted) return;
+  linkHinted = true;
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+    toast('本地服务已断开，请确认游戏服务是否已启动');
+    return;
+  }
+  const el = $('linkHint');
+  if (el) el.hidden = false;
 }
 
 function connect(code, opts) {
@@ -56,13 +71,23 @@ function connect(code, opts) {
   ws.addEventListener('close', () => {
     if (S.intentionalClose) return;
     setChip('已断开');
-    setTimeout(() => connect(S.reconnectCode), 1500);
+    // 多数情况是分享链接不完整（缺少访问参数），服务端会直接拒绝连接
+    showLinkHint();
+    setTimeout(() => connect(S.reconnectCode), 2500);
+  });
+
+  ws.addEventListener('error', () => {
+    if (!S.joinedOnce) showLinkHint();
   });
 }
 
 function onMessage(msg) {
   switch (msg.t) {
     case 'joined':
+      S.joinedOnce = true;
+      linkHinted = false;
+      const els = $('linkHint');
+      if (els) els.hidden = true;
       S.playerId = msg.playerId;
       S.reconnectCode = msg.code;
       S.spectator = !!msg.spectator;
@@ -72,8 +97,16 @@ function onMessage(msg) {
       if (msg.spectator) toast('以观战身份进入，可以看到所有人的身份');
       break;
 
-    case 'state':
+    case 'state': {
+      const previousSpeakingSeat = S.room && S.room.speakingSeat;
       S.room = msg.room;
+      // state 是最可靠的当前发言人来源。只要服务端已切到另一位，立刻撤掉旧气泡，
+      // 不依赖 turn / turnEnd 消息是否恰好先到。
+      if (previousSpeakingSeat !== msg.room.speakingSeat && S.activeBubbleSeat != null
+        && S.activeBubbleSeat !== msg.room.speakingSeat) {
+        S.bubbleToken += 1;
+        hideBubble();
+      }
       S.reconnectCode = msg.room.code;
       // 新一轮投票开始时，清空观战视角的实时票数记录
       if (msg.room.phase === 'vote' && S.lastPhase !== 'vote') S.voteCasts = [];
@@ -82,6 +115,7 @@ function onMessage(msg) {
       renderSpeakTimer();
       applyWolfTalk();
       break;
+    }
 
     case 'speakTimer':
       if (S.room) {
@@ -117,6 +151,10 @@ function onMessage(msg) {
       break;
 
     case 'turn':
+      // 回合切到下一位时，上一位尚未播出的气泡不能继续冒出来。
+      S.bubbleToken += 1;
+      S.activeBubbleSeat = null;
+      hideBubble();
       S.turn = msg;
       S.turnSeq += 1;
       S.votePick = null;
@@ -125,6 +163,9 @@ function onMessage(msg) {
       break;
 
     case 'turnEnd':
+      S.bubbleToken += 1;
+      S.activeBubbleSeat = null;
+      hideBubble();
       S.turn = null;
       render();
       break;
@@ -208,6 +249,7 @@ function leaveRoom() {
   $('result').classList.remove('show');
   $('drawer').classList.remove('show');
   $('entryScreen').classList.add('on');
+  setGameControlsVisible(false);
   $('lobbyScreen').classList.remove('on');
   $('gameScreen').classList.remove('on');
   $('watchTag').hidden = true;
@@ -271,6 +313,7 @@ function render() {
   $('entryScreen').classList.toggle('on', false);
   $('lobbyScreen').classList.toggle('on', inLobby);
   $('gameScreen').classList.toggle('on', !inLobby);
+  setGameControlsVisible(!inLobby);
   document.body.classList.toggle('night', r.phase === 'night');
   $('watchTag').hidden = !spec;
 
@@ -344,7 +387,6 @@ function renderLobby() {
     <button class="block-btn ${r.self.ready ? '' : 'primary'}" id="readyBtn">${r.self.ready ? '取消准备' : '我已准备就绪'}</button>
     <button class="block-btn ${r.self.isHost ? 'primary' : 'outline'}" id="startBtn">${r.self.isHost ? '开始游戏' : '等待房主开局'}</button>
     <p class="dock-note">${r.players.filter((p) => !p.isAI).length} 位真人 · ${(r.spectators || []).length} 位观众 · 不足 6 人由 AI 补齐</p>
-    <p class="dock-note">语音：${S.voiceStyle === 'system' ? '系统音色' : S.voiceStyle === 'mandarin' ? '真人·普通话' : '真人·带方言（东北话 / 陕西话）'}</p>
   `;
 
   $('readyBtn').addEventListener('click', () => send({ t: 'ready', value: !r.self.ready }));
@@ -434,6 +476,7 @@ function renderGame() {
 /* ---------------- 底部操作 ---------------- */
 function renderDock(force) {
   const r = S.room;
+  if (finishSpeak && (!S.turn || !['speak', 'lastWords'].includes(S.turn.kind))) finishSpeak();
   if (!r || r.phase === 'lobby') return;
 
   const key = [
@@ -522,7 +565,7 @@ function dockWolf(t) {
   const s = t.suggest;
   const dock = $('gameDock');
   const talkTip = t.talk
-    ? '<div class="talk-tip">狼队频道已开，直接开口商量就行，只有狼队友听得到</div>'
+    ? '<div class="talk-tip">当前已和队友连麦中，可直接发言</div>'
     : '';
   if (!s) {
     dock.innerHTML = `<div class="dock-hint">点选今晚要击杀的玩家</div>${talkTip}`;
@@ -539,7 +582,9 @@ function dockWolf(t) {
       ${talkTip}
       <div class="speak-tip" id="wolfTip">同意就直接刀 ${esc(s.name)}，想换就点桌上的头像。</div>
     </div>`;
-  $('agreeBtn').addEventListener('click', () => {
+      $('agreeBtn').addEventListener('click', () => {
+    stopRecognizer();
+    if (S.voice) S.voice.setTalking(false);
     send({ t: 'action', kind: 'wolfPick', seat: s.seat });
     S.turn = null;
     renderDock(true);
@@ -587,6 +632,7 @@ function dockWitchPoison(t) {
 /* ---------------- 语音发言 ---------------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognizer = null;
+let micStream = null; // 拿到麦克风流代表用户已授权，后续回合可自动开启识别
 
 function stopRecognizer() {
   if (recognizer) {
@@ -594,6 +640,63 @@ function stopRecognizer() {
     recognizer = null;
   }
 }
+
+/** 申请 / 复用麦克风权限；返回是否拿到了权限 */
+async function ensureMic() {
+  if (micStream) return true;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    return true;
+  } catch {
+    micStream = null;
+    return false;
+  }
+}
+
+/**
+ * 启动识别并把内容写进输入框。
+ * 用 finalized + interim 分开累积，避免每次 onresult 把整段话重复追加一遍。
+ */
+function startRecognizer(input, tip, onStopUI) {
+  if (!SR) return false;
+  try {
+    const rec = new SR();
+    recognizer = rec;
+    rec.lang = 'zh-CN';
+    rec.continuous = true;
+    rec.interimResults = true;
+    let finalized = '';
+
+    rec.onresult = (ev) => {
+      let interim = '';
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const chunk = ev.results[i][0].transcript;
+        if (ev.results[i].isFinal) finalized += chunk;
+        else interim += chunk;
+      }
+      input.value = (finalized + interim).trim();
+    };
+    rec.onerror = (ev) => {
+      if (tip) tip.textContent = ev.error === 'not-allowed'
+        ? '麦克风被拒绝，请在浏览器里允许麦克风，或改用打字。'
+        : '语音识别没成功（' + ev.error + '），可以直接打字。';
+      if (onStopUI) onStopUI();
+    };
+    rec.onend = () => {
+      if (recognizer === rec) recognizer = null;
+      if (onStopUI) onStopUI();
+    };
+    rec.start();
+    if (S.voice) S.voice.setTalking(true);
+    return true;
+  } catch {
+    if (tip) tip.textContent = '无法启动语音识别，请直接打字。';
+    return false;
+  }
+}
+
+let finishSpeak = null;
 
 function dockSpeak(t) {
   const dock = $('gameDock');
@@ -609,7 +712,7 @@ function dockSpeak(t) {
       <div class="speak-head"><span>${head}</span><span id="speakTimer">${left}s</span></div>
       <textarea class="speak-input" id="speakInput" placeholder="${placeholder}"></textarea>
       <div class="speak-actions">
-        <button class="hold-btn" id="holdBtn">按住说话</button>
+        <button class="hold-btn" id="holdBtn">${SR ? '点一下开始说话' : '按住说话'}</button>
         <button class="send-btn" id="sendBtn">${isLast ? '说完遗言' : '结束发言'}</button>
       </div>
       <div class="speak-tip" id="speakTip"></div>
@@ -620,56 +723,82 @@ function dockSpeak(t) {
   const tip = $('speakTip');
   const timerEl = $('speakTimer');
 
+  // 没有识别能力就直接打字；有就做成"点一下开始 / 再点一下停"，比长按稳，也更适合手机
   if (!SR) {
     hold.style.display = 'none';
     tip.textContent = '当前浏览器不支持语音识别，请直接打字。';
   } else {
-    tip.textContent = '首次使用需允许麦克风，说完松开手指。';
-    hold.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      try {
-        recognizer = new SR();
-        recognizer.lang = 'zh-CN';
-        recognizer.continuous = true;
-        recognizer.interimResults = true;
-        const base = input.value;
-        recognizer.onresult = (ev) => {
-          let txt = '';
-          for (let i = ev.resultIndex; i < ev.results.length; i++) txt += ev.results[i][0].transcript;
-          input.value = (base ? base + ' ' : '') + txt;
-        };
-        recognizer.onerror = (ev) => { tip.textContent = '识别失败（' + ev.error + '），可以改用打字。'; };
-        recognizer.start();
-        if (S.voice) S.voice.setTalking(true);
-        hold.classList.add('recording');
-        hold.textContent = '正在听…松开结束';
-      } catch {
-        tip.textContent = '无法启动语音识别，请打字。';
-      }
-    });
+    tip.textContent = '点「点一下开始说话」就能说；说完再点一次停，或直接打字。';
+    let listening = false;
+    const setUI = (on) => {
+      listening = on;
+      hold.classList.toggle('recording', on);
+      hold.textContent = on ? '正在听…再点停' : '点一下开始说话';
+    };
     const stop = () => {
-      if (!hold.classList.contains('recording')) return;
+      if (!listening) return;
       stopRecognizer();
       if (S.voice) S.voice.setTalking(false);
-      hold.classList.remove('recording');
-      hold.textContent = '按住说话';
+      setUI(false);
     };
-    hold.addEventListener('pointerup', stop);
-    hold.addEventListener('pointercancel', stop);
-    hold.addEventListener('pointerleave', stop);
+    hold.addEventListener('click', async () => {
+      if (listening) { stop(); return; }
+      const ok = await ensureMic();
+      if (!ok) { tip.textContent = '没拿到麦克风权限，请允许麦克风或改用打字。'; return; }
+      tip.textContent = '正在听…说完点一下停。';
+      if (startRecognizer(input, tip, () => setUI(false))) setUI(true);
+    });
+    if (micStream) {
+      // 已经授权过麦克风：轮到自己发言时自动开始听，不用每次点
+      startRecognizer(input, tip, () => setUI(false));
+      setUI(true);
+      tip.textContent = '已自动开始听你说话，说完点一下停，或点「结束发言」。';
+    }
   }
 
-  $('sendBtn').addEventListener('click', () => {
+  let finished = false;
+  let iv = null;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (iv) clearInterval(iv);
     stopRecognizer();
-    send({ t: 'action', kind: isLast ? 'lastWords' : 'speak', text: (input.value || '').trim() });
+    if (S.voice) S.voice.setTalking(false);
+    finishSpeak = null;
+    // 服务端已经轮到别人了（超时接管），就别再提交，避免把上一位的话塞进下一位回合
+    const stillMine = S.room && S.room.speakingSeat != null
+      ? S.room.speakingSeat === (S.room.self && S.room.self.seat)
+      : true;
+    if (stillMine && S.turn === t) {
+      send({ t: 'action', kind: isLast ? 'lastWords' : 'speak', text: (input.value || '').trim() });
+    }
     S.turn = null;
     renderDock(true);
-  });
+  };
+  finishSpeak = finish;
 
-  const iv = setInterval(() => {
+  $('sendBtn').addEventListener('click', finish);
+
+  iv = setInterval(() => {
+    // 倒计时以服务端为准：服务端已经切到下一位，立刻收掉本地倒计时
+    const notMineNow = S.room && S.room.speakingSeat != null
+      && S.room.speakingSeat !== (S.room.self && S.room.self.seat);
+    if (notMineNow || S.turn !== t) {
+      clearInterval(iv);
+      stopRecognizer();
+      if (S.voice) S.voice.setTalking(false);
+      finished = true;
+      finishSpeak = null;
+      S.turn = null;
+      renderDock(true);
+      return;
+    }
     left -= 1;
     timerEl.textContent = Math.max(0, left) + 's';
-    if (left <= 0) clearInterval(iv);
+    if (left <= 0) {
+      clearInterval(iv);
+      finish();
+    }
   }, 1000);
 }
 
@@ -861,6 +990,20 @@ let voiceList = [];
 function refreshVoices() {
   if (window.speechSynthesis) voiceList = window.speechSynthesis.getVoices() || [];
 }
+
+// 移动端必须在用户点击后主动唤醒系统语音；否则后续异步消息到达时会被浏览器静默拦截。
+function unlockSpeech() {
+  if (!window.speechSynthesis) return;
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance('语音已开启');
+    u.lang = 'zh-CN';
+    u.volume = 1;
+    u.rate = 1;
+    u.onend = refreshVoices;
+    window.speechSynthesis.speak(u);
+  } catch { /* 忽略 */ }
+}
 if (window.speechSynthesis) {
   refreshVoices();
   window.speechSynthesis.onvoiceschanged = refreshVoices;
@@ -899,6 +1042,7 @@ let audioUnlocked = false;
 
 /** 移动端自动播放限制：第一次点屏幕时先放一段静音，把音频通道“解锁” */
 function unlockAudio() {
+  unlockSpeech();
   if (audioUnlocked) return;
   audioUnlocked = true;
   try {
@@ -908,6 +1052,7 @@ function unlockAudio() {
   } catch { /* 忽略 */ }
 }
 document.addEventListener('pointerdown', unlockAudio, { once: true });
+document.addEventListener('touchstart', unlockAudio, { once: true, passive: true });
 
 function ttsUrl(text, voice) {
   return `/tts?text=${encodeURIComponent(text)}&v=${encodeURIComponent(voice)}`;
@@ -917,14 +1062,32 @@ function ttsUrl(text, voice) {
 const speechQueue = [];
 let speechBusy = false;
 
+/**
+ * 触发"这句话开始说了"的回调：文字（主持人台词/发言气泡）跟着它走，
+ * 保证眼睛看到的字 = 耳朵听到的声。同一句只触发一次。
+ */
+function fireStart(job) {
+  if (job.startFired) return;
+  job.startFired = true;
+  try { if (job.opts.onStart) job.opts.onStart(); } catch { /* 忽略 */ }
+}
+
 function speak(text, opts) {
   return new Promise((resolve) => {
-    if (!S.soundOn || !text) { resolve(); return; }
-    if (speechQueue.length >= 6) {
-      const dropped = speechQueue.shift();
-      if (dropped) dropped.resolve();
+    const options = opts || {};
+    // 关了声音也要把文字显示出来，否则界面上什么都不显示
+    if (!S.soundOn || !text) {
+      fireStart({ opts: options });
+      resolve();
+      return;
     }
-    const job = { text: String(text), opts: opts || {}, resolve, audio: null };
+    if (speechQueue.length >= 3) {
+      // 积压太多说明语音比游戏慢了，丢掉最旧的，别让声音一直追不上画面
+      let dropped;
+      while (speechQueue.length >= 3) dropped = speechQueue.shift();
+      if (dropped) { fireStart(dropped); dropped.resolve(); }
+    }
+    const job = { text: String(text), opts: options, resolve, audio: null, startFired: false };
     // 队首且空闲时提前加载音频，减少句间空白
     if (!speechBusy && !speechQueue.length && canUseNeural(job)) {
       job.audio = new Audio(ttsUrl(job.text, job.opts.voice));
@@ -943,13 +1106,14 @@ function pumpSpeech() {
   if (speechBusy) return;
   const job = speechQueue.shift();
   if (!job) return;
-  if (!S.soundOn) { job.resolve(); pumpSpeech(); return; }
+  if (!S.soundOn) { fireStart(job); job.resolve(); pumpSpeech(); return; }
 
   speechBusy = true;
   let finished = false;
   const done = () => {
     if (finished) return;
     finished = true;
+    fireStart(job); // 万一语音没出声，文字也得显示出来
     speechBusy = false;
     job.resolve();
     pumpSpeech();
@@ -1015,6 +1179,7 @@ function playNeural(job) {
     audio.onplaying = () => {
       started = true;
       clearTimeout(startTimer);
+      fireStart(job); // 声音刚出口，这时才把文字亮出来
       const dur = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : job.text.length * 0.25 + 2;
       // 播完之后再留一点余量，防止 onended 没触发导致队列卡住
       endTimer = setTimeout(() => finish(true), dur * 1000 + 2500);
@@ -1039,7 +1204,7 @@ function systemSpeak(job, done) {
 
   const next = () => {
     if (i >= segs.length) { clearTimeout(guard); done(); return; }
-    const seg = segs[i++];
+      const seg = segs[i++];
     try {
       const u = new SpeechSynthesisUtterance(seg);
       u.lang = 'zh-CN';
@@ -1047,6 +1212,9 @@ function systemSpeak(job, done) {
       u.pitch = job.opts.pitch != null ? job.opts.pitch : 1;
       const v = zhVoice();
       if (v) u.voice = v;
+      u.onstart = () => {
+        if (i === 1) fireStart(job);
+      };
       u.onend = () => {
         // 逗号短停、句号长停，模拟换气
         const gap = /[。！？!?]$/.test(seg) ? 260 + Math.random() * 160 : 90 + Math.random() * 90;
@@ -1059,7 +1227,8 @@ function systemSpeak(job, done) {
     }
   };
 
-  guard = setTimeout(done, Math.max(3200, text.length * 340 + 1800));
+  // 系统语音偶尔不会触发 onend；保护时间要覆盖完整播报，不能提前结束队列。
+  guard = setTimeout(done, Math.max(9000, text.length * 520 + 3000));
   next();
 }
 
@@ -1073,33 +1242,45 @@ function clearSpeechQueue() {
 }
 
 async function sayHost(text, voice) {
-  $('hostText').textContent = text;
-  $('hostText').classList.remove('pulse');
-  void $('hostText').offsetWidth;
-  $('hostText').classList.add('pulse');
-  $('hostDot').classList.add('speaking');
-  await speak(text, { voice, kind: 'host' });
+  // 主持人开始说话时，立刻中断玩家播报与真人发言，避免两路声音重叠。
+  clearSpeechQueue();
+  if (finishSpeak) finishSpeak();
+
+  const show = () => {
+    // 主持人台词只显示在顶部提示位，避免与玩家发言气泡重复出现。
+    $('hostText').textContent = text;
+    $('hostText').classList.remove('pulse');
+    void $('hostText').offsetWidth;
+    $('hostText').classList.add('pulse');
+    $('hostDot').classList.add('speaking');
+  };
+
+  // 主持人每句都进入语音队列；神经语音不可用时会自动回退到系统中文音色。
+  await speak(text, { voice, kind: 'host', onStart: show, rate: 0.9 });
   $('hostDot').classList.remove('speaking');
 }
 
 /* ---------------- 发言气泡 ---------------- */
 let bubbleTimer = null;
-let lastSaidKey = '';
-let lastSaidAt = 0;
+/**
+ * 按座位各记一句：同一个玩家说过的话，8 秒内不再念第二遍。
+ * 主持人只在游戏页展示与记录，不通过语音队列重复播报。
+ * 之前是全局变量只记一条，两个玩家交替说话时会互相覆盖，导致去重失效。
+ */
+const saidBySeat = new Map();
 
-/** 同一个人同一句话，5 秒内只念一遍 */
 function shouldSpeak(seat, text) {
-  const key = seat + '|' + text;
   const now = Date.now();
-  if (key === lastSaidKey && now - lastSaidAt < 5000) return false;
-  lastSaidKey = key;
-  lastSaidAt = now;
+  const prev = saidBySeat.get(seat);
+  if (prev && prev.text === text && now - prev.at < 8000) return false;
+  saidBySeat.set(seat, { text, at: now });
   return true;
 }
 
-function showBubble(name, text, tag) {
+function showBubble(name, text, tag, seat = null) {
   const el = $('bubble');
   if (!el) return;
+  S.activeBubbleSeat = seat;
   $('bubbleName').textContent = name || '';
   $('bubbleTag').textContent = tag || '发言';
   $('bubbleText').textContent = text || '';
@@ -1107,7 +1288,11 @@ function showBubble(name, text, tag) {
   el.hidden = false;
   requestAnimationFrame(() => el.classList.add('show'));
   clearTimeout(bubbleTimer);
-  bubbleTimer = setTimeout(hideBubble, Math.min(16000, Math.max(5000, (text || '').length * 280)));
+  // 主持人提示固定展示 8 秒；玩家发言至少停留 18 秒，长发言按字数延长。
+  const stay = tag === '主持人提示'
+    ? 8000
+    : Math.min(45000, Math.max(18000, (text || '').length * 750));
+  bubbleTimer = setTimeout(hideBubble, stay);
 }
 
 /** 气泡始终贴在底部操作区上沿：dock 高度变化（如切到投票面板）时自动跟随 */
@@ -1129,6 +1314,7 @@ if (window.ResizeObserver) {
 function hideBubble() {
   const el = $('bubble');
   if (!el) return;
+  S.activeBubbleSeat = null;
   el.classList.remove('show');
   clearTimeout(bubbleTimer);
   bubbleTimer = setTimeout(() => { el.hidden = true; }, 280);
@@ -1136,10 +1322,22 @@ function hideBubble() {
 
 function addSpeech(msg) {
   if (!S.room) return;
+  if (msg.kind === 'host') return;
   const self = S.room.self;
   const isMe = !!(self && self.seat === msg.seat);
-  showBubble(`${msg.seat + 1}号 ${msg.name}`, msg.text, isMe ? '你的发言' : '发言');
-  if (!isMe && shouldSpeak(msg.seat, msg.text)) speak(msg.text, { voice: msg.voice, kind: 'ai' });
+  const title = `${msg.seat + 1}号 ${msg.name}`;
+  const tag = isMe ? '你的发言' : '发言';
+  // 绑定这条发言的回合版本：换到下一位后，旧发言即使晚开始播也不能覆盖新气泡。
+  const token = S.bubbleToken;
+  const show = () => {
+    if (token !== S.bubbleToken) return;
+    const current = S.room && S.room.speakingSeat;
+    if (current != null && current !== msg.seat) return;
+    showBubble(title, msg.text, tag, msg.seat);
+  };
+  if (isMe) show();
+  else if (shouldSpeak(msg.seat, msg.text)) speak(msg.text, { voice: msg.voice, kind: 'ai', onStart: show });
+  // 同一个 AI 重复的话不再念第二遍（主持人不受此限制）
   if ($('drawer').classList.contains('show')) renderLog();
 }
 
@@ -1147,8 +1345,17 @@ function addLastWords(msg) {
   if (!S.room) return;
   const self = S.room.self;
   const isMe = !!(self && self.seat === msg.seat);
-  showBubble(`${msg.seat + 1}号 ${msg.name}`, msg.text, isMe ? '你的遗言' : '遗言');
-  if (!isMe && shouldSpeak(msg.seat, msg.text)) speak(msg.text, { voice: msg.voice, kind: 'ai' });
+  const title = `${msg.seat + 1}号 ${msg.name}`;
+  const tag = isMe ? '你的遗言' : '遗言';
+  const token = S.bubbleToken;
+  const show = () => {
+    if (token !== S.bubbleToken) return;
+    const current = S.room && S.room.speakingSeat;
+    if (current != null && current !== msg.seat) return;
+    showBubble(title, msg.text, tag, msg.seat);
+  };
+  if (isMe) show();
+  else if (shouldSpeak(msg.seat, msg.text)) speak(msg.text, { voice: msg.voice, kind: 'ai', onStart: show });
   if ($('drawer').classList.contains('show')) renderLog();
 }
 
@@ -1368,9 +1575,20 @@ $('micBtn').addEventListener('click', async () => {
    ========================================================= */
 $('soundBtn').addEventListener('click', () => {
   S.soundOn = !S.soundOn;
+  if (S.soundOn) {
+    unlockAudio();
+    toast('语音已开启，请保持页面打开');
+  }
   $('soundBtn').textContent = S.soundOn ? '语音开' : '语音关';
   if (!S.soundOn) clearSpeechQueue();
 });
+
+function setGameControlsVisible(visible) {
+  ['logBtn', 'micBtn', 'soundBtn'].forEach((id) => {
+    const el = $(id);
+    if (el) el.hidden = !visible;
+  });
+}
 
 /* ---------------- 音色切换（入口页） ---------------- */
 const voiceModeBtn = $('voiceModeBtn');
@@ -1401,9 +1619,7 @@ voiceModeBtn.addEventListener('click', () => {
     toast('已切换系统音色（不带方言）');
     return;
   }
-  const p = VOICE_PREVIEW[S.voiceStyle];
-  toast(S.voiceStyle === 'dialect' ? '真人音色·东北话，先听一句' : '真人音色·普通话，先听一句');
-  speak(p.text, { voice: p.voice, kind: 'host' });
+  toast(S.voiceStyle === 'dialect' ? '已选择真人·带方言' : '已选择真人·普通话；主持人台词请在「记录」查看');
 });
 renderVoiceMode();
 
