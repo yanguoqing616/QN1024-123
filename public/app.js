@@ -74,6 +74,9 @@ function onMessage(msg) {
     case 'state':
       S.room = msg.room;
       S.reconnectCode = msg.room.code;
+      // 新一轮投票开始时，清空观战视角的实时票数记录
+      if (msg.room.phase === 'vote' && S.lastPhase !== 'vote') S.voteCasts = [];
+      S.lastPhase = msg.room.phase;
       render();
       renderSpeakTimer();
       applyWolfTalk();
@@ -90,7 +93,14 @@ function onMessage(msg) {
 
     case 'wolfTalk':
       if (S.room) S.room.wolfTalk = !!msg.on;
-      applyWolfTalk(msg.ids || null);
+      applyWolfTalk(msg.ids || null, msg.listeners || null);
+      break;
+
+    case 'voteCast':
+      // 观战上帝视角：实时看到谁投给了谁
+      if (!S.voteCasts) S.voteCasts = [];
+      S.voteCasts.push({ from: msg.from, to: msg.to });
+      renderDock(true);
       break;
 
     case 'host':
@@ -232,6 +242,10 @@ function render() {
   if (inLobby) { setChip(spec ? '观战中' : '等待开'); renderLobby(); }
   else renderGame();
 
+  // 投票阶段 / 轮到点选目标时，收起上一轮发言气泡，别挡住要投的人和座位高亮
+  const picking = S.turn && ['vote', 'wolfPick', 'seerPick', 'poisonPick'].includes(S.turn.kind);
+  if (r.phase === 'vote' || picking) hideBubble();
+
   renderSpeakTimer();
   maybeRoleIntro();
 }
@@ -261,7 +275,7 @@ function renderLobby() {
       rows.push(`
         <div class="lobby-row ${p.you ? 'you' : ''}">
           <div class="lobby-avatar">${avatarSvg(p.seat, 40)}</div>
-          <div class="lobby-name">${esc(p.name)}${p.you ? '（你）' : ''}
+          <div class="lobby-name">${p.seat + 1}号 ${esc(p.name)}${p.you ? '（你）' : ''}
             <small>${p.isAI ? 'AI 补位' : '真人玩家'}${p.you && r.hostId === undefined ? '' : ''}</small>
           </div>
           <span class="tag ${p.ready ? 'ok' : ''}">${p.ready ? '已准备' : '未准备'}</span>
@@ -270,7 +284,7 @@ function renderLobby() {
       rows.push(`
         <div class="lobby-row">
           <div class="lobby-avatar">·</div>
-          <div class="lobby-name">空位<small>开局后由 AI 补上</small></div>
+          <div class="lobby-name">${i + 1}号 空位<small>开局后由 AI 补上</small></div>
           <span class="tag ai">等待</span>
         </div>`);
     }
@@ -318,7 +332,7 @@ function buildSeats(count) {
     el.style.left = 50 + 40 * Math.cos(ang) + '%';
     el.style.top = 50 + 40 * Math.sin(ang) + '%';
     el.style.animationDelay = i * 45 + 'ms';
-    el.innerHTML = '<div class="seat-avatar"></div><div class="seat-role" hidden></div><div class="seat-name"></div>';
+    el.innerHTML = `<div class="seat-avatar"></div><div class="seat-num">${i + 1}</div><div class="seat-role" hidden></div><div class="seat-name"></div>`;
     el.addEventListener('click', () => onSeatClick(i));
     $('seats').appendChild(el);
     seatEls.push(el);
@@ -359,7 +373,7 @@ function renderGame() {
       roleEl.className = 'seat-role ' + (p.role === 'wolf' || isWolfMate ? 'wolf' : 'good');
     }
 
-    el.querySelector('.seat-name').textContent = p.name;
+    el.querySelector('.seat-name').textContent = `${p.seat + 1}号 ${p.name}`;
   });
 
   if (r.phase === 'night') {
@@ -402,16 +416,28 @@ function renderDock(force) {
   const t = S.turn;
 
   if (S.spectator) {
-    const watching = r.speakingSeat != null
-      ? (() => {
-          const p = r.players.find((x) => x.seat === r.speakingSeat);
-          return `${p ? esc(p.name) : ''} 正在发言…`;
-        })()
-      : r.phase === 'end' ? '本局已结束，等房主开新局' : r.phase === 'vote' ? '投票中…' : '你正在观战，不参与发言和投票';
+    let watching = '';
+    if (r.speakingSeat != null) {
+      const p = r.players.find((x) => x.seat === r.speakingSeat);
+      watching = p ? `${p.seat + 1}号 ${esc(p.name)} 正在发言…` : '正在发言…';
+    } else if (r.phase === 'end') {
+      watching = '本局已结束，等房主开新局';
+    } else if (r.phase === 'vote') {
+      watching = `投票中…${r.vote ? ` 已投 ${r.vote.done}/${r.vote.total}` : ''}`;
+    } else if (r.wolfTalk) {
+      watching = '狼人正在密谈，你可以旁听';
+    } else {
+      watching = '你正在观战，不参与发言和投票';
+    }
+    // 实时票数流向（上帝视角）
+    const casts = (S.voteCasts || []).slice(-6).map((c) =>
+      `<div class="watch-cast">${esc(c.from)} → ${esc(c.to)}</div>`
+    ).join('');
     dock.innerHTML = `
       <div class="watch-panel">
         <div class="watch-head"><span class="watch-dot"></span>观战中 · 上帝视角</div>
         <div class="watch-sub">${watching}</div>
+        ${casts ? `<div class="watch-casts">${casts}</div>` : ''}
       </div>`;
     return;
   }
@@ -427,7 +453,7 @@ function renderDock(force) {
 
   if (r.speakingSeat != null) {
     const p = r.players.find((x) => x.seat === r.speakingSeat);
-    dock.innerHTML = `<div class="dock-hint">${p ? esc(p.name) + ' 正在发言…' : '正在发言…'}</div>`;
+    dock.innerHTML = `<div class="dock-hint">${p ? `${p.seat + 1}号 ${esc(p.name)} 正在发言…` : '正在发言…'}</div>`;
   } else if (r.phase === 'vote') {
     dock.innerHTML = `<div class="dock-hint">投票中，等待其他人…${r.vote ? ` 已投 ${r.vote.done}/${r.vote.total}` : ''}</div>`;
   } else if (r.phase === 'end') {
@@ -615,7 +641,7 @@ function dockVote(t) {
   const me = r.self;
   const targets = r.players.filter((p) => p.alive && p.seat !== me.seat);
   const cur = S.votePick;
-  const curName = cur != null && r.players[cur] ? r.players[cur].name : '';
+  const curName = cur != null && r.players[cur] ? `${cur + 1}号 ${r.players[cur].name}` : '';
   const done = r.vote ? r.vote.done : 0;
   const total = r.vote ? r.vote.total : targets.length + 1;
   const dock = $('gameDock');
@@ -630,7 +656,7 @@ function dockVote(t) {
         ${targets.map((p) => `
           <button class="vote-item ${cur === p.seat ? 'sel' : ''}" data-seat="${p.seat}">
             <span class="vote-ava">${avatarSvg(p.seat, 38)}</span>
-            <span class="vote-name">${esc(p.name)}</span>
+            <span class="vote-name">${p.seat + 1}号 ${esc(p.name)}</span>
           </button>`).join('')}
       </div>
       <div class="vote-actions">
@@ -726,13 +752,29 @@ function beep() {
 }
 
 /* ---------------- 狼队语音频道 ---------------- */
-function applyWolfTalk(ids) {
+function applyWolfTalk(ids, listeners) {
   const r = S.room;
   if (!r || !r.self) return;
   const on = !!r.wolfTalk;
+  const key = on ? 'on:' + (ids || []).join(',') : 'off';
+
+  // 观战：上帝视角，可以旁听狼人密谈（只听不说）
+  if (S.spectator) {
+    const bar = $('wolfBar');
+    bar.hidden = !on;
+    if (key === S.wolfKey) return;
+    S.wolfKey = key;
+    if (on) {
+      bar.querySelector('span:last-child').textContent = '狼人正在密谈，你可以旁听（仅观战视角）';
+      if (ids && ids.length) S.voice.setWolfListen(ids);
+    } else {
+      S.voice.setWolfMode(false);
+    }
+    return;
+  }
+
   const isWolf = r.self.role === 'wolf' && r.self.alive;
   const list = ids || r.self.wolfIds || [];
-  const key = on ? 'on:' + list.join(',') : 'off';
   $('wolfBar').hidden = !(on && isWolf);
 
   if (key === S.wolfKey) return;
@@ -742,7 +784,7 @@ function applyWolfTalk(ids) {
     // 夜里所有人先把普通频道的麦关掉，狼人只在专用频道里说
     S.voice.setTalking(false);
     if (isWolf) {
-      S.voice.setWolfMode(true, list, S.playerId).then((ok) => {
+      S.voice.setWolfMode(true, list, S.playerId, listeners || []).then((ok) => {
         S.voice.setWolfTalking(!!ok);
         if (!ok) toast('麦克风没打开，狼队频道听不到你，可以点选和打字');
       });
@@ -1023,12 +1065,27 @@ function showBubble(name, text, tag) {
   $('bubbleName').textContent = name || '';
   $('bubbleTag').textContent = tag || '发言';
   $('bubbleText').textContent = text || '';
-  const dock = $('gameDock');
-  el.style.bottom = ((dock ? dock.offsetHeight : 120) + 6) + 'px';
+  placeBubble();
   el.hidden = false;
   requestAnimationFrame(() => el.classList.add('show'));
   clearTimeout(bubbleTimer);
   bubbleTimer = setTimeout(hideBubble, Math.min(16000, Math.max(5000, (text || '').length * 280)));
+}
+
+/** 气泡始终贴在底部操作区上沿：dock 高度变化（如切到投票面板）时自动跟随 */
+function placeBubble() {
+  const el = $('bubble');
+  const dock = $('gameDock');
+  if (el && dock) el.style.bottom = (dock.offsetHeight + 6) + 'px';
+}
+if (window.ResizeObserver) {
+  window.addEventListener('DOMContentLoaded', () => {
+    const dock = $('gameDock');
+    if (dock) new ResizeObserver(() => {
+      const el = $('bubble');
+      if (el && !el.hidden) placeBubble();
+    }).observe(dock);
+  });
 }
 
 function hideBubble() {
@@ -1043,7 +1100,7 @@ function addSpeech(msg) {
   if (!S.room) return;
   const self = S.room.self;
   const isMe = !!(self && self.seat === msg.seat);
-  showBubble(msg.name, msg.text, isMe ? '你的发言' : '发言');
+  showBubble(`${msg.seat + 1}号 ${msg.name}`, msg.text, isMe ? '你的发言' : '发言');
   if (!isMe && shouldSpeak(msg.seat, msg.text)) speak(msg.text, { voice: msg.voice, kind: 'ai' });
   if ($('drawer').classList.contains('show')) renderLog();
 }
@@ -1052,7 +1109,7 @@ function addLastWords(msg) {
   if (!S.room) return;
   const self = S.room.self;
   const isMe = !!(self && self.seat === msg.seat);
-  showBubble(msg.name, msg.text, isMe ? '你的遗言' : '遗言');
+  showBubble(`${msg.seat + 1}号 ${msg.name}`, msg.text, isMe ? '你的遗言' : '遗言');
   if (!isMe && shouldSpeak(msg.seat, msg.text)) speak(msg.text, { voice: msg.voice, kind: 'ai' });
   if ($('drawer').classList.contains('show')) renderLog();
 }
@@ -1208,7 +1265,7 @@ function showResult() {
       <div class="reveal-row">
         <div class="reveal-avatar">${avatarSvg(p.seat, 40)}</div>
         <div class="reveal-info">
-          <div class="reveal-name">${esc(p.name)}${p.you ? '（你）' : ''}${p.alive ? '' : ' · 已出局'}</div>
+          <div class="reveal-name">${p.seat + 1}号 ${esc(p.name)}${p.you ? '（你）' : ''}${p.alive ? '' : ' · 已出局'}</div>
           <div class="reveal-role">${p.isAI ? 'AI 玩家' : '真人玩家'}</div>
         </div>
         <div class="camp-badge camp-${camp}">${roleName(p.role)}</div>

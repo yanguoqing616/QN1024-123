@@ -148,11 +148,19 @@ wss.on('connection', (socket) => {
         break;
 
       case 'rtc': {
-        const target = room.players.find((p) => p.id === msg.to);
+        let target = room.players.find((p) => p.id === msg.to);
+        if (!target) target = room.spectators.find((s) => s.id === msg.to);
         if (!target || player.isSpectator) break;
         const channel = msg.data && msg.data.channel;
-        // 狼人频道：只有这局活着的狼人之间，且狼人回合内才放行
-        if (channel === 'wolf' && !room.canWolfTalk(player, target)) break;
+        if (channel === 'wolf') {
+          // 狼人频道：狼↔狼在狼聊窗口内放行；狼→观众也放行（观战旁听密谈）
+          const ok = target.isSpectator
+            ? room.wolfTalk && player.alive && player.role === 'wolf'
+            : room.canWolfTalk(player, target);
+          if (!ok) break;
+        } else if (target.isSpectator) {
+          break; // 普通频道不接观众，观众只旁听狼聊
+        }
         reply(target.socket, { t: 'rtc', from: player.id, data: msg.data });
         break;
       }

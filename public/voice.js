@@ -16,6 +16,7 @@ export class Voice {
     this.wolfPcs = new Map();
     this.wolfStream = null;
     this.wolfSeat = null;
+    this.wolfListen = false; // 观战旁听模式：只收不发
   }
 
   async enable() {
@@ -98,7 +99,7 @@ export class Voice {
     }
   }
 
-  async setWolfMode(on, ids = [], myId = '') {
+  async setWolfMode(on, ids = [], myId = '', listeners = []) {
     if (!on) {
       this.closeWolf();
       return false;
@@ -108,15 +109,31 @@ export class Voice {
     const list = ids.filter((id) => id && id !== myId);
     this.wolfSeat = myId;
     for (const id of list) await this.addWolfPeer(id, String(myId) < String(id));
+    // 观战旁听：把密谈音频推一份给观众（自己发起 offer，只发不收对方的麦）
+    for (const lid of listeners) {
+      if (lid && lid !== myId) await this.addWolfPeer(lid, true);
+    }
     return true;
   }
 
+  /** 观战旁听狼聊：只收不发，不占用麦克风 */
+  async setWolfListen(ids = []) {
+    this.wolfListen = true;
+    for (const id of ids) {
+      if (id) await this.addWolfPeer(id, false);
+    }
+  }
+
   async addWolfPeer(id, initiator) {
-    if (!id || this.wolfPcs.has(id) || !this.wolfStream) return;
+    if (!id || this.wolfPcs.has(id)) return;
+    const listenOnly = !this.wolfStream; // 观战没有本地麦，只收音频
+    if (!listenOnly && !this.wolfStream) return;
     const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
     this.wolfPcs.set(id, pc);
 
-    this.wolfStream.getTracks().forEach((t) => pc.addTrack(t, this.wolfStream));
+    if (!listenOnly) {
+      this.wolfStream.getTracks().forEach((t) => pc.addTrack(t, this.wolfStream));
+    }
     pc.onicecandidate = (ev) => {
       if (ev.candidate) {
         this.send({ t: 'rtc', to: id, data: { channel: 'wolf', type: 'ice', candidate: ev.candidate } });
@@ -138,6 +155,7 @@ export class Voice {
       if (el) el.remove();
     }
     this.wolfPcs.clear();
+    this.wolfListen = false;
     this.setWolfTalking(false);
   }
 
@@ -173,8 +191,10 @@ export class Voice {
   }
 
   async onWolfSignal(from, data) {
-    const ok = await this.ensureWolfStream();
-    if (!ok) return;
+    if (!this.wolfListen) {
+      const ok = await this.ensureWolfStream();
+      if (!ok) return;
+    }
     if (data.type === 'offer') {
       await this.addWolfPeer(from, false);
       const pc = this.wolfPcs.get(from);

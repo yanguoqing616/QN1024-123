@@ -309,6 +309,20 @@ export class Room {
         this.sendTo(p, { t: 'wolfTalk', on: true, ids }); // 名单只发给狼
       }
     }
+    // 观众上帝视角：旁听狼人密谈（观众本来就看得见全部身份，名单直接给）
+    const listenIds = this.players
+      .filter((p) => p.alive && p.role === 'wolf' && !p.isAI)
+      .map((p) => p.id);
+    const watchers = this.spectators.map((s) => s.id);
+    for (const s of this.spectators) {
+      this.sendTo(s, { t: 'wolfTalk', on: true, listen: true, ids: listenIds });
+    }
+    // 狼人端拿到观众名单，把密谈音频也推一份给观众
+    for (const p of this.players) {
+      if (!p.isAI && p.alive && p.role === 'wolf') {
+        this.sendTo(p, { t: 'wolfTalk', on: true, ids, listeners: watchers });
+      }
+    }
   }
 
   closeWolfTalk() {
@@ -728,12 +742,14 @@ export class Room {
     this.sync();
 
     for (const p of voters) {
+      let cast = null; // 观战视角记录：目标描述
       if (p.isAI) {
         await pace(500);
         const t = aiVote(this, p);
         if (t) {
           tally.set(t.seat, (tally.get(t.seat) || 0) + 1);
           record.push(`${p.name} → ${t.name}`);
+          cast = `${t.seat + 1}号 ${t.name}`;
         }
       } else {
         const action = await this.ask(p, { kind: 'vote', hint: '点选你要放逐的玩家' }, T.VOTE);
@@ -742,11 +758,19 @@ export class Room {
           if (t && t.alive && t !== p) {
             tally.set(t.seat, (tally.get(t.seat) || 0) + 1);
             record.push(`${p.name} → ${t.name}`);
+            cast = `${t.seat + 1}号 ${t.name}`;
           }
+        } else if (action) {
+          cast = '弃票';
         }
       }
       done += 1;
       this.voteProgress = { done, total: voters.length };
+      // 观战上帝视角：实时看到谁投给了谁
+      if (this.spectators.length) {
+        const line = { t: 'voteCast', from: `${p.seat + 1}号 ${p.name}`, to: cast || '未投' };
+        for (const s of this.spectators) this.sendTo(s, line);
+      }
       this.sync();
     }
 
